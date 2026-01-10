@@ -1,0 +1,119 @@
+.flowchart {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.flowchart--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.flowchart__placeholder {
+    text-align: center;
+    color: var(--color-text-secondary);
+    animation: fadeIn 0.5s ease-out;
+}
+
+.flowchart__placeholder-icon {
+    margin-bottom: var(--space-4);
+    color: #475569;
+}
+
+.flowchart__placeholder h3 {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.flowchart__placeholder p {
+    font-size: var(--font-size-sm);
+    max-width: 300px;
+    line-height: 1.6;
+}
+
+.flowchart__placeholder .highlight {
+    color: var(--color-accent-purple);
+    font-weight: var(--font-weight-semibold);
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(147, 51, 234, 0.2));
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+}
+
+.flowchart__toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: var(--space-2) var(--space-3);
+    background: rgba(15, 23, 42, 0.8);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+    backdrop-filter: blur(8px);
+}
+
+.flowchart__stats {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+}
+
+.flowchart__svg {
+    flex: 1;
+    width: 100%;
+    cursor: grab;
+    user-select: none;
+}
+
+.flowchart__svg:active {
+    cursor: grabbing;
+}
+
+/* Node styles */
+.nodes text {
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Edge animations */
+.edges path {
+    transition: stroke 0.2s ease, stroke-width 0.2s ease;
+}
+
+/* Hover effects via CSS when possible */
+.nodes g {
+    cursor: pointer;
+    transition: filter 0.2s ease;
+}
+
+.nodes g:hover {
+    filter: brightness(1.1) !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .flowchart__toolbar {
+        padding: var(--space-1) var(--space-2);
+    }
+
+    .flowchart__stats {
+        font-size: 10px;
+    }
+}
+
+/* Animation for placeholder */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

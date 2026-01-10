@@ -1,0 +1,174 @@
+.header {
+    display: flex;
+    align-items: center;
+    height: var(--header-height);
+    padding: 0 var(--space-4);
+    background-color: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    gap: var(--space-6);
+}
+
+/* Brand Section */
+.header__brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.header__logo {
+    font-size: 1.75rem;
+    cursor: pointer;
+}
+
+.header__title {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
+    letter-spacing: -0.5px;
+}
+
+.header__title-accent {
+    background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.header__version {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    background-color: var(--color-bg-tertiary);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    margin-left: var(--space-1);
+}
+
+/* Actions Section */
+.header__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex: 1;
+}
+
+/* Language Selector */
+.language-selector {
+    display: flex;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: var(--space-1);
+    gap: var(--space-1);
+}
+
+.language-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background-color: transparent;
+    transition: all var(--transition-fast);
+}
+
+.language-btn:hover:not(:disabled) {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-elevated);
+}
+
+.language-btn--active {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.language-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.language-icon {
+    font-size: var(--font-size-xs);
+}
+
+/* Action Buttons */
+.header__buttons {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.action-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    transition: all var(--transition-fast);
+}
+
+.action-btn__icon {
+    font-size: var(--font-size-base);
+}
+
+.action-btn--visualize {
+    background: linear-gradient(135deg, var(--color-accent-purple), #9333ea);
+    color: white;
+    box-shadow: 0 2px 8px rgba(163, 113, 247, 0.3);
+}
+
+.action-btn--visualize:hover {
+    box-shadow: 0 4px 12px rgba(163, 113, 247, 0.4);
+}
+
+.action-btn--run {
+    background: linear-gradient(135deg, var(--color-accent-green), #16a34a);
+    color: white;
+    box-shadow: 0 2px 8px rgba(63, 185, 80, 0.3);
+}
+
+.action-btn--run:hover:not(:disabled) {
+    box-shadow: 0 4px 12px rgba(63, 185, 80, 0.4);
+}
+
+.action-btn--run:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+/* Status Section */
+.header__status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+}
+
+.status-badge {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-full);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+}
+
+.status-badge--success {
+    background-color: var(--color-success-bg);
+    color: var(--color-accent-green);
+}
+
+.status-badge--info {
+    background-color: var(--color-info-bg);
+    color: var(--color-accent-blue);
+}
+
+.status-badge--error {
+    background-color: var(--color-error-bg);
+    color: var(--color-error);
+}

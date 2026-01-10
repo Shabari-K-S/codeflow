@@ -1,0 +1,95 @@
+import { motion } from 'framer-motion';
+import { useStore } from '../stores/store';
+import './Header.css';
+
+export function Header() {
+    const { language, setLanguage, visualize, execute, flowGraph, trace } = useStore();
+
+    const handleVisualize = () => {
+        visualize();
+        execute();
+    };
+
+    return (
+        <header className="header">
+            <div className="header__brand">
+                <motion.div
+                    className="header__logo"
+                    whileHover={{ rotate: 360 }}
+                    transition={{ duration: 0.5 }}
+                >
+                    🌊
+                </motion.div>
+                <h1 className="header__title">
+                    Code<span className="header__title-accent">Flow</span>
+                </h1>
+                <span className="header__version">v1.0</span>
+            </div>
+
+            <div className="header__actions">
+                {/* Language Selector */}
+                <div className="language-selector">
+                    <button
+                        className={`language-btn ${language === 'javascript' ? 'language-btn--active' : ''}`}
+                        onClick={() => setLanguage('javascript')}
+                    >
+                        <span className="language-icon">🟨</span>
+                        JavaScript
+                    </button>
+                    <button
+                        className={`language-btn ${language === 'python' ? 'language-btn--active' : ''}`}
+                        onClick={() => setLanguage('python')}
+                        disabled
+                        title="Coming soon!"
+                    >
+                        <span className="language-icon">🐍</span>
+                        Python
+                    </button>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="header__buttons">
+                    <motion.button
+                        className="action-btn action-btn--visualize"
+                        onClick={handleVisualize}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                    >
+                        <span className="action-btn__icon">📊</span>
+                        <span>Visualize</span>
+                    </motion.button>
+
+                    <motion.button
+                        className="action-btn action-btn--run"
+                        onClick={execute}
+                        disabled={!flowGraph}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                    >
+                        <span className="action-btn__icon">▶️</span>
+                        <span>Run</span>
+                    </motion.button>
+                </div>
+            </div>
+
+            {/* Status Indicators */}
+            <div className="header__status">
+                {flowGraph && (
+                    <span className="status-badge status-badge--success">
+                        ✓ Parsed
+                    </span>
+                )}
+                {trace && !trace.hasError && (
+                    <span className="status-badge status-badge--info">
+                        {trace.totalSteps} steps
+                    </span>
+                )}
+                {trace?.hasError && (
+                    <span className="status-badge status-badge--error">
+                        Error
+                    </span>
+                )}
+            </div>
+        </header>
+    );
+}

@@ -1,0 +1,205 @@
+.variable-inspector {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: var(--color-bg-primary);
+    border-left: 1px solid var(--color-border-primary);
+    overflow: hidden;
+}
+
+/* Section layout */
+.inspector-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    border-bottom: 1px solid var(--color-border-primary);
+}
+
+.inspector-section:last-child {
+    border-bottom: none;
+}
+
+.inspector-section--output {
+    flex: 0 0 auto;
+    max-height: 150px;
+}
+
+.inspector-section__header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-secondary);
+    flex-shrink: 0;
+}
+
+.inspector-section__icon {
+    font-size: var(--font-size-sm);
+}
+
+.inspector-section__header h3 {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    flex: 1;
+}
+
+.inspector-section__count {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-muted);
+    background-color: var(--color-bg-tertiary);
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+}
+
+.inspector-section__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-2);
+}
+
+.inspector-section__console {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+}
+
+/* Empty state */
+.inspector-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+.inspector-empty__icon {
+    font-size: 1.5rem;
+    opacity: 0.5;
+    margin-bottom: var(--space-2);
+}
+
+.inspector-empty p {
+    font-size: var(--font-size-sm);
+}
+
+/* Variable items */
+.variable-item {
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg-secondary);
+    margin-bottom: var(--space-2);
+    transition: all var(--transition-fast);
+}
+
+.variable-item:hover {
+    background-color: var(--color-bg-tertiary);
+}
+
+.variable-item--new {
+    border-left: 3px solid var(--color-accent-blue);
+}
+
+.variable-item__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-1);
+}
+
+.variable-item__name {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.variable-item__type {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    text-transform: lowercase;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background-color: var(--color-bg-tertiary);
+}
+
+.variable-item__value {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    word-break: break-all;
+}
+
+.variable-item__value code {
+    background: none;
+    padding: 0;
+}
+
+/* Call stack */
+.call-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.call-stack__frame {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg-secondary);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+}
+
+.call-stack__frame--active {
+    background-color: var(--color-info-bg);
+    border-left: 3px solid var(--color-accent-blue);
+}
+
+.call-stack__index {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    background-color: var(--color-bg-tertiary);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    min-width: 24px;
+    text-align: center;
+}
+
+.call-stack__name {
+    flex: 1;
+    color: var(--color-accent-purple);
+    font-weight: var(--font-weight-medium);
+}
+
+.call-stack__line {
+    color: var(--color-text-muted);
+}
+
+/* Console output */
+.console-line {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.console-line:last-child {
+    border-bottom: none;
+}
+
+.console-line__prefix {
+    color: var(--color-accent-green);
+    flex-shrink: 0;
+}
+
+.console-line__text {
+    color: var(--color-text-primary);
+    word-break: break-all;
+}
