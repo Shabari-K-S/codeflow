@@ -28,12 +28,14 @@ export interface FlowNode {
     height?: number;
 }
 
+export type FlowEdgeType = 'normal' | 'true' | 'false' | 'loop-back' | 'call';
+
 export interface FlowEdge {
     id: string;
     source: string;
     target: string;
     label?: string;       // 'true', 'false', 'loop', etc.
-    type?: 'normal' | 'true' | 'false' | 'loop-back';
+    type?: FlowEdgeType;
 }
 
 export interface FlowGraph {

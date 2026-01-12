@@ -3,6 +3,7 @@ import { CodeEditor } from './Editor/CodeEditor';
 import { FlowChart } from './FlowChart/FlowChart';
 import { VariableInspector } from './VariablePanel/VariableInspector';
 import { ExecutionControls } from './Controls/ExecutionControls';
+import { Timeline } from './Timeline/Timeline';
 import './Layout.css';
 
 export function Layout() {
@@ -24,6 +25,7 @@ export function Layout() {
                 </div>
             </main>
 
+            <Timeline />
             <ExecutionControls />
         </div>
     );
