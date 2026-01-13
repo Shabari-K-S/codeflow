@@ -588,7 +588,7 @@ export function FlowChart() {
         if (!components.length) return;
 
         components.forEach(comp => {
-            const group = d3.select(`#component-${comp.id}`);
+            const group = d3.select<SVGGElement, unknown>(`#component-${comp.id}`);
             if (group.empty()) return;
 
             const drag = d3.drag<SVGGElement, unknown>()
