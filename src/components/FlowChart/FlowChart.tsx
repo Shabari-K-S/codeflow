@@ -5,10 +5,10 @@ import { useStore } from '../../stores/store';
 import type { FlowNode, FlowEdge } from '../../types';
 import './FlowChart.css';
 
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 56;
-const HORIZONTAL_SPACING = 140;
-const VERTICAL_SPACING = 100;
+const NODE_WIDTH = 160;
+const NODE_HEIGHT = 52;
+const HORIZONTAL_SPACING = 80;
+const VERTICAL_SPACING = 90;
 
 interface LayoutNode extends FlowNode {
     x: number;
@@ -30,28 +30,31 @@ interface FlowComponent {
 }
 
 
-// Layout a single connected component
+// Layout a single connected component with improved decision branch handling
 function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
-    // Build adjacency lists (ignoring call edges)
-    const outgoing = new Map<string, string[]>();
-    nodes.forEach(n => outgoing.set(n.id, []));
+    if (nodes.length === 0) return [];
+
+    // Build adjacency lists
+    const outgoing = new Map<string, { target: string; type: string }[]>();
+    const incoming = new Map<string, string[]>();
+    nodes.forEach(n => {
+        outgoing.set(n.id, []);
+        incoming.set(n.id, []);
+    });
     edges.forEach(e => {
         if (e.type !== 'loop-back' && e.type !== 'call') {
-            outgoing.get(e.source)?.push(e.target);
+            outgoing.get(e.source)?.push({ target: e.target, type: e.type || 'normal' });
+            incoming.get(e.target)?.push(e.source);
         }
     });
 
-    // Assign rows using BFS
+    // Assign rows using topological sort with level assignment
     const rows = new Map<string, number>();
+    const columns = new Map<string, number>();
 
     // Find root(s) - nodes with no incoming edges or Start/Function types
     const incomingCounts = new Map<string, number>();
-    nodes.forEach(n => incomingCounts.set(n.id, 0));
-    edges.forEach(e => {
-        if (e.type !== 'loop-back' && e.type !== 'call') {
-            incomingCounts.set(e.target, (incomingCounts.get(e.target) || 0) + 1);
-        }
-    });
+    nodes.forEach(n => incomingCounts.set(n.id, incoming.get(n.id)?.length || 0));
 
     const roots = nodes.filter(n =>
         (incomingCounts.get(n.id) === 0) ||
@@ -59,53 +62,75 @@ function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
         n.type === 'function'
     );
 
-    const queue: { id: string; row: number }[] = roots.map(r => ({ id: r.id, row: 0 }));
+    // BFS to assign rows
+    const queue: { id: string; row: number; col: number }[] = roots.map(r => ({ id: r.id, row: 0, col: 0 }));
     const visited = new Set<string>(roots.map(r => r.id));
-    roots.forEach(r => rows.set(r.id, 0));
+    roots.forEach(r => {
+        rows.set(r.id, 0);
+        columns.set(r.id, 0);
+    });
 
     while (queue.length > 0) {
-        const { id, row } = queue.shift()!;
+        const { id, row, col } = queue.shift()!;
+        const node = nodes.find(n => n.id === id);
+        const children = outgoing.get(id) || [];
 
-        outgoing.get(id)?.forEach(targetId => {
-            if (!visited.has(targetId) || (rows.get(targetId)! < row + 1)) {
-                visited.add(targetId);
-                rows.set(targetId, row + 1);
-                queue.push({ id: targetId, row: row + 1 });
+        // For decision nodes, spread children horizontally
+        const isDecision = node?.type === 'decision' || node?.type === 'loop';
+
+        if (isDecision && children.length === 2) {
+            // True branch goes left, false branch goes right
+            const trueChild = children.find(c => c.type === 'true');
+            const falseChild = children.find(c => c.type === 'false');
+
+            if (trueChild && !visited.has(trueChild.target)) {
+                visited.add(trueChild.target);
+                rows.set(trueChild.target, row + 1);
+                columns.set(trueChild.target, col - 1);
+                queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
             }
-        });
-    }
-
-    nodes.forEach(n => {
-        if (!rows.has(n.id)) rows.set(n.id, 0);
-    });
-
-    const rowGroups = new Map<number, FlowNode[]>();
-    nodes.forEach(node => {
-        const row = rows.get(node.id) || 0;
-        if (!rowGroups.has(row)) rowGroups.set(row, []);
-        rowGroups.get(row)!.push(node);
-    });
-
-    const layoutNodes: LayoutNode[] = [];
-    const maxRow = Math.max(...Array.from(rows.values()));
-
-    for (let row = 0; row <= maxRow; row++) {
-        const group = rowGroups.get(row) || [];
-        const totalWidth = group.length * NODE_WIDTH + (group.length - 1) * HORIZONTAL_SPACING;
-        const startX = -totalWidth / 2 + NODE_WIDTH / 2;
-
-        group.forEach((node, index) => {
-            layoutNodes.push({
-                ...node,
-                x: startX + index * (NODE_WIDTH + HORIZONTAL_SPACING),
-                y: row * (NODE_HEIGHT + VERTICAL_SPACING),
-                width: NODE_WIDTH,
-                height: NODE_HEIGHT,
-                column: index,
-                row,
+            if (falseChild && !visited.has(falseChild.target)) {
+                visited.add(falseChild.target);
+                rows.set(falseChild.target, row + 1);
+                columns.set(falseChild.target, col + 1);
+                queue.push({ id: falseChild.target, row: row + 1, col: col + 1 });
+            }
+        } else {
+            // Normal sequential flow
+            children.forEach((child, index) => {
+                if (!visited.has(child.target)) {
+                    visited.add(child.target);
+                    rows.set(child.target, row + 1);
+                    columns.set(child.target, col + (index - Math.floor(children.length / 2)));
+                    queue.push({ id: child.target, row: row + 1, col: columns.get(child.target)! });
+                }
             });
-        });
+        }
     }
+
+    // Handle unvisited nodes
+    nodes.forEach(n => {
+        if (!rows.has(n.id)) {
+            rows.set(n.id, 0);
+            columns.set(n.id, 0);
+        }
+    });
+
+    // Create layout nodes with positions based on row and column
+    const layoutNodes: LayoutNode[] = nodes.map(node => {
+        const row = rows.get(node.id) || 0;
+        const col = columns.get(node.id) || 0;
+
+        return {
+            ...node,
+            x: col * (NODE_WIDTH + HORIZONTAL_SPACING),
+            y: row * (NODE_HEIGHT + VERTICAL_SPACING),
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            column: col,
+            row,
+        };
+    });
 
     return layoutNodes;
 }
@@ -152,10 +177,10 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
         }
     });
 
-    // 3. Layout each component independently and pack them
+    // 3. Layout each component independently and pack them HORIZONTALLY
     const flowComponents: FlowComponent[] = [];
 
-    // Sort components: 'Start' first
+    // Sort components: 'Start' first, then by size
     components.sort((a, b) => {
         const aHasStart = a.some(id => nodes.find(n => n.id === id)?.type === 'start');
         const bHasStart = b.some(id => nodes.find(n => n.id === id)?.type === 'start');
@@ -164,14 +189,15 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
         return b.length - a.length;
     });
 
-    let currentOffsetY = 0;
-    const padding = 100;
+    let currentOffsetX = 0;
+    const padding = 80;
 
     components.forEach(componentIds => {
         const componentNodes = nodes.filter(n => componentIds.includes(n.id));
         const componentEdges = edges.filter(e => componentIds.includes(e.source) && componentIds.includes(e.target));
 
         const layout = layoutComponent(componentNodes, componentEdges);
+        if (layout.length === 0) return;
 
         const minX = Math.min(...layout.map(n => n.x - n.width / 2));
         const maxX = Math.max(...layout.map(n => n.x + n.width / 2));
@@ -181,11 +207,7 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
         const width = maxX - minX;
         const height = maxY - minY;
 
-        // Center the component internally around (0,0) or keep it relative? 
-        // We will assign an initial global position for the COMPONENT.
-        // And the nodes will be relative to that component's position.
-
-        // Let's say the component position is the center of the component.
+        // Center the component internally
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
 
@@ -195,13 +217,12 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
             n.y -= centerY;
         });
 
-        // Current Offset Strategy: Stack them vertically for initial layout
-        // The component's initial position will be (0, currentOffsetY + height/2)
-        const compX = 0;
-        const compY = currentOffsetY + height / 2;
+        // HORIZONTAL placement: Place components side-by-side
+        const compX = currentOffsetX + width / 2;
+        const compY = 0; // All components aligned at top
 
         flowComponents.push({
-            id: componentNodes[0].id, // stable id for the component
+            id: componentNodes[0].id,
             nodes: layout,
             edges: componentEdges,
             x: compX,
@@ -210,7 +231,7 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
             height
         });
 
-        currentOffsetY += height + padding;
+        currentOffsetX += width + padding;
     });
 
     return flowComponents;
@@ -287,11 +308,15 @@ function getNodeIcon(type: string): string {
 }
 
 export function FlowChart() {
-    const { flowGraph, trace, currentStepIndex } = useStore();
+    const { flowGraph, trace, currentStepIndex, playbackState } = useStore();
 
     // State for component positions: { [componentId]: {x, y} }
     const [positions, setPositions] = useState<Record<string, { x: number, y: number }>>({});
     const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+
+    // Check if execution is complete (at last step OR finished state)
+    const isAtLastStep = trace && currentStepIndex >= trace.totalSteps - 1;
+    const isFinished = playbackState === 'finished' || isAtLastStep;
 
     const currentLine = useMemo(() => {
         if (trace && currentStepIndex >= 0 && currentStepIndex < trace.steps.length) {
@@ -610,7 +635,10 @@ export function FlowChart() {
                                 <g className="nodes">
                                     <AnimatePresence>
                                         {comp.nodes.map((node, index) => {
-                                            const isActive = node.lineNumber === currentLine && node.lineNumber > 0;
+                                            // Highlight End node when playback is finished, otherwise highlight by current line
+                                            const isEndNodeActive = isFinished && node.type === 'end';
+                                            const isLineActive = node.lineNumber === currentLine && node.lineNumber > 0;
+                                            const isActive = isEndNodeActive || isLineActive;
                                             const gradientId = isActive ? 'gradient-active' : `gradient-${node.type}`;
                                             const icon = getNodeIcon(node.type);
                                             const isOval = node.type === 'start' || node.type === 'end';

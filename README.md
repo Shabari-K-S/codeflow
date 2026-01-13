@@ -26,6 +26,9 @@ CodeFlow is an innovative developer tool that transforms static code into dynami
 ### Advanced Features
 - **🔍 Step-Through Debugging** - Step forward, backward, or jump to breakpoints
 - **🎬 Execution Replay** - Record and replay code execution
+- **📐 Resizable Panels** - VS Code-like resizable panels with drag-to-resize
+- **📊 Improved Flowchart Layout** - Horizontal component placement, decision branches spread horizontally
+- **🎮 Header Playback Controls** - Compact playback controls integrated in the header bar
 - **📈 Complexity Analysis** - Visualize time/space complexity in real-time
 - **🌳 Data Structure Visualization** - See arrays, objects, trees, and graphs animate
 - **🔗 Dependency Graph** - Map function dependencies and module imports

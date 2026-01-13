@@ -2,8 +2,7 @@ import { Header } from './Header';
 import { CodeEditor } from './Editor/CodeEditor';
 import { FlowChart } from './FlowChart/FlowChart';
 import { VariableInspector } from './VariablePanel/VariableInspector';
-import { ExecutionControls } from './Controls/ExecutionControls';
-import { Timeline } from './Timeline/Timeline';
+import { SplitPane } from './SplitPane/SplitPane';
 import './Layout.css';
 
 export function Layout() {
@@ -12,21 +11,23 @@ export function Layout() {
             <Header />
 
             <main className="layout__main">
-                <div className="layout__editor">
-                    <CodeEditor />
-                </div>
-
-                <div className="layout__flowchart">
-                    <FlowChart />
-                </div>
-
-                <div className="layout__inspector">
-                    <VariableInspector />
-                </div>
+                <SplitPane
+                    direction="horizontal"
+                    defaultSizes={[30, 45, 25]}
+                    minSizes={[280, 350, 220]}
+                    persistKey="main-horizontal"
+                >
+                    <div className="layout__panel">
+                        <CodeEditor />
+                    </div>
+                    <div className="layout__panel">
+                        <FlowChart />
+                    </div>
+                    <div className="layout__panel">
+                        <VariableInspector />
+                    </div>
+                </SplitPane>
             </main>
-
-            <Timeline />
-            <ExecutionControls />
         </div>
     );
 }

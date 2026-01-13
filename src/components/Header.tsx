@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { useStore } from '../stores/store';
+import { PlaybackControls } from './Controls/PlaybackControls';
 import './Header.css';
 
 export function Header() {
@@ -70,6 +71,9 @@ export function Header() {
                         <span>Run</span>
                     </motion.button>
                 </div>
+
+                {/* Playback Controls */}
+                <PlaybackControls />
             </div>
 
             {/* Status Indicators */}
