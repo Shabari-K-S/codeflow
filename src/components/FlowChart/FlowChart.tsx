@@ -5,10 +5,10 @@ import { useStore } from '../../stores/store';
 import type { FlowNode, FlowEdge } from '../../types';
 import './FlowChart.css';
 
-const NODE_WIDTH = 160;
-const NODE_HEIGHT = 52;
-const HORIZONTAL_SPACING = 80;
-const VERTICAL_SPACING = 90;
+const NODE_WIDTH = 140;
+const NODE_HEIGHT = 44;
+const HORIZONTAL_SPACING = 160; // Increased for clearer branch separation
+const VERTICAL_SPACING = 70;   // Reduced for more compact vertical layout
 
 interface LayoutNode extends FlowNode {
     x: number;
@@ -70,6 +70,38 @@ function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
         columns.set(r.id, 0);
     });
 
+    // Helper to calculate subtree weight (number of nodes reachable before merge/end)
+    // Returns { weight: number, isTerminating: boolean }
+    const getBranchWeight = (startNodeId: string, visited: Set<string>): { weight: number, isTerminating: boolean } => {
+        let count = 0;
+        let terminating = false;
+        const q = [startNodeId];
+        const localVisited = new Set<string>();
+
+        while (q.length > 0) {
+            const curr = q.shift()!;
+            if (localVisited.has(curr) || visited.has(curr)) continue;
+            localVisited.add(curr);
+            count++;
+
+            const currNode = nodes.find(n => n.id === curr);
+            if (currNode?.type === 'return' || currNode?.type === 'end') {
+                terminating = true;
+            }
+
+            // Stop if we hit a node already in the main visited set (merge point)
+
+            const kids = outgoing.get(curr) || [];
+            kids.forEach(k => {
+                if (!localVisited.has(k.target)) q.push(k.target);
+            });
+
+            // Limit depth to avoid performance issues
+            if (count > 50) break;
+        }
+        return { weight: count, isTerminating: terminating };
+    };
+
     while (queue.length > 0) {
         const { id, row, col } = queue.shift()!;
         const node = nodes.find(n => n.id === id);
@@ -79,21 +111,89 @@ function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
         const isDecision = node?.type === 'decision' || node?.type === 'loop';
 
         if (isDecision && children.length === 2) {
-            // True branch goes left, false branch goes right
             const trueChild = children.find(c => c.type === 'true');
             const falseChild = children.find(c => c.type === 'false');
 
-            if (trueChild && !visited.has(trueChild.target)) {
-                visited.add(trueChild.target);
-                rows.set(trueChild.target, row + 1);
-                columns.set(trueChild.target, col - 1);
-                queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
-            }
-            if (falseChild && !visited.has(falseChild.target)) {
-                visited.add(falseChild.target);
-                rows.set(falseChild.target, row + 1);
-                columns.set(falseChild.target, col + 1);
-                queue.push({ id: falseChild.target, row: row + 1, col: col + 1 });
+            // Different handling for loops vs if-statements
+            const isLoop = node?.type === 'loop';
+
+            if (isLoop) {
+                // LOOPS: Body -> LEFT, Exit -> DOWN (Main Flow)
+                if (trueChild && !visited.has(trueChild.target)) {
+                    visited.add(trueChild.target);
+                    rows.set(trueChild.target, row + 1);
+                    columns.set(trueChild.target, col - 1);
+                    queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
+                }
+                if (falseChild && !visited.has(falseChild.target)) {
+                    visited.add(falseChild.target);
+                    rows.set(falseChild.target, row + 1);
+                    columns.set(falseChild.target, col);
+                    queue.push({ id: falseChild.target, row: row + 1, col: col });
+                }
+            } else {
+                // IF/ELSE: Smart Branching
+                // Heavier branch (main logic) -> DOWN
+                // Lighter branch (guard clause/error) -> SIDE
+
+                if (trueChild && falseChild) {
+                    const trueWeight = getBranchWeight(trueChild.target, visited);
+                    const falseWeight = getBranchWeight(falseChild.target, visited);
+
+                    let trueGoesDown = true; // Default
+
+                    // Heuristic: If one is terminating (return) and other isn't, 
+                    // non-terminating goes DOWN.
+                    if (trueWeight.isTerminating && !falseWeight.isTerminating) {
+                        trueGoesDown = false;
+                    } else if (!trueWeight.isTerminating && falseWeight.isTerminating) {
+                        trueGoesDown = true;
+                    } else {
+                        // Otherwise, heavier branch goes DOWN
+                        trueGoesDown = trueWeight.weight >= falseWeight.weight;
+                    }
+
+                    if (trueGoesDown) {
+                        // True -> Down, False -> Right
+                        if (!visited.has(trueChild.target)) {
+                            visited.add(trueChild.target);
+                            rows.set(trueChild.target, row + 1);
+                            columns.set(trueChild.target, col);
+                            queue.push({ id: trueChild.target, row: row + 1, col: col });
+                        }
+                        if (!visited.has(falseChild.target)) {
+                            visited.add(falseChild.target);
+                            rows.set(falseChild.target, row + 1);
+                            columns.set(falseChild.target, col + 1);
+                            queue.push({ id: falseChild.target, row: row + 1, col: col + 1 });
+                        }
+                    } else {
+                        // False -> Down, True -> Left (to balance)
+                        if (!visited.has(falseChild.target)) {
+                            visited.add(falseChild.target);
+                            rows.set(falseChild.target, row + 1);
+                            columns.set(falseChild.target, col);
+                            queue.push({ id: falseChild.target, row: row + 1, col: col });
+                        }
+                        if (!visited.has(trueChild.target)) {
+                            visited.add(trueChild.target);
+                            rows.set(trueChild.target, row + 1);
+                            columns.set(trueChild.target, col - 1);
+                            queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
+                        }
+                    }
+
+                } else {
+                    // Fallback if missing a child
+                    children.forEach((child, i) => {
+                        if (!visited.has(child.target)) {
+                            visited.add(child.target);
+                            rows.set(child.target, row + 1);
+                            columns.set(child.target, col + i);
+                            queue.push({ id: child.target, row: row + 1, col: col + i });
+                        }
+                    });
+                }
             }
         } else {
             // Normal sequential flow
@@ -135,9 +235,82 @@ function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
     return layoutNodes;
 }
 
+// Remove merge nodes by redirecting edges around them (single-pass with chain resolution)
+function removeMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNode[], edges: FlowEdge[] } {
+    const mergeNodeIds = new Set(nodes.filter(n => n.label === 'merge').map(n => n.id));
+
+    if (mergeNodeIds.size === 0) {
+        return { nodes, edges };
+    }
+
+    // Build a map from merge node ID to its outgoing target
+    const mergeTargets = new Map<string, string>();
+    for (const mergeId of mergeNodeIds) {
+        const outEdge = edges.find(e => e.source === mergeId && e.type !== 'loop-back' && e.type !== 'call');
+        if (outEdge) {
+            mergeTargets.set(mergeId, outEdge.target);
+        }
+    }
+
+    // Resolve chain: follow merge -> merge -> ... -> final non-merge target
+    function getFinalTarget(mergeId: string, visited: Set<string> = new Set()): string | null {
+        if (visited.has(mergeId)) return null; // Cycle detection
+        visited.add(mergeId);
+
+        const target = mergeTargets.get(mergeId);
+        if (!target) return null;
+
+        // If target is also a merge node, follow the chain
+        if (mergeNodeIds.has(target)) {
+            return getFinalTarget(target, visited);
+        }
+        return target;
+    }
+
+    const newEdges: FlowEdge[] = [];
+    const edgesToRemove = new Set<string>();
+
+    for (const mergeId of mergeNodeIds) {
+        const incomingEdges = edges.filter(e => e.target === mergeId);
+        const finalTarget = getFinalTarget(mergeId);
+
+        if (finalTarget) {
+            for (const inEdge of incomingEdges) {
+                newEdges.push({
+                    id: `edge_bypass_${inEdge.source}_${finalTarget}`,
+                    source: inEdge.source,
+                    target: finalTarget,
+                    type: inEdge.type,
+                    label: inEdge.label,
+                });
+                edgesToRemove.add(inEdge.id);
+            }
+        } else {
+            // No valid target - just remove incoming edges
+            for (const inEdge of incomingEdges) {
+                edgesToRemove.add(inEdge.id);
+            }
+        }
+
+        // Mark all outgoing edges from merge for removal
+        edges.filter(e => e.source === mergeId).forEach(e => edgesToRemove.add(e.id));
+    }
+
+    const filteredNodes = nodes.filter(n => !mergeNodeIds.has(n.id));
+    const filteredEdges = edges.filter(e => !edgesToRemove.has(e.id));
+
+    return {
+        nodes: filteredNodes,
+        edges: [...filteredEdges, ...newEdges],
+    };
+}
+
 // Improved layout algorithm with component separation
-function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent[] {
-    if (nodes.length === 0) return [];
+function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): FlowComponent[] {
+    if (inputNodes.length === 0) return [];
+
+    // Remove merge nodes by redirecting edges around them
+    const { nodes, edges } = removeMergeNodes(inputNodes, inputEdges);
 
     // 1. Build adjacency for component detection
     const neighbors = new Map<string, string[]>();
@@ -190,7 +363,7 @@ function identifyComponents(nodes: FlowNode[], edges: FlowEdge[]): FlowComponent
     });
 
     let currentOffsetX = 0;
-    const padding = 80;
+    const padding = 120; // Increased spacing between components
 
     components.forEach(componentIds => {
         const componentNodes = nodes.filter(n => componentIds.includes(n.id));
