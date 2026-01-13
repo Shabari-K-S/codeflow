@@ -28,7 +28,7 @@ export interface FlowNode {
     height?: number;
 }
 
-export type FlowEdgeType = 'normal' | 'true' | 'false' | 'loop-back' | 'call';
+export type FlowEdgeType = 'normal' | 'true' | 'false' | 'loop-back' | 'call' | 'recursive';
 
 export interface FlowEdge {
     id: string;

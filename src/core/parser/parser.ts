@@ -196,7 +196,7 @@ export function generateFlowGraph(ast: t.File): FlowGraph {
         const funcEndNode: FlowNode = {
             id: generateNodeId(),
             type: 'end',
-            label: 'return',
+            label: 'End',
             code: '',
             lineNumber: funcNode.endLineNumber || 0,
         };
@@ -228,12 +228,73 @@ export function generateFlowGraph(ast: t.File): FlowGraph {
         funcNode.children = [funcEndNode.id];
     });
 
+    // Post-process: remove useless merge nodes (only 1 incoming, 1 outgoing non-recursive edge)
+    const cleanedGraph = removeUselessMergeNodes(nodes, edges);
+
     return {
-        nodes,
-        edges,
+        nodes: cleanedGraph.nodes,
+        edges: cleanedGraph.edges,
         entryNodeId: startNode.id,
         exitNodeId: endNode.id,
     };
+}
+
+// Remove passthrough nodes (merge/loop exit) that only have one incoming and one outgoing edge
+function removeUselessMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNode[], edges: FlowEdge[] } {
+    // Find all passthrough-type nodes
+    const passthroughNodes = nodes.filter(n => n.label === 'merge' || n.label === 'loop exit');
+
+    for (const passNode of passthroughNodes) {
+        // Count incoming and outgoing edges (exclude recursive/call edges which are informational)
+        const incoming = edges.filter(e => e.target === passNode.id && e.type !== 'recursive' && e.type !== 'call');
+        const outgoing = edges.filter(e => e.source === passNode.id && e.type !== 'recursive' && e.type !== 'call');
+
+        // If passthrough node is just a passthrough (1 in, 1 out) or (1 in, 0 out), remove it
+        if (incoming.length === 1 && outgoing.length <= 1) {
+            const inEdge = incoming[0];
+            const outEdge = outgoing[0];
+
+            if (outEdge) {
+                // Create a new edge bypassing the node
+                const bypassEdge: FlowEdge = {
+                    id: `edge_bypass_${inEdge.source}_${outEdge.target}`,
+                    source: inEdge.source,
+                    target: outEdge.target,
+                    type: inEdge.type, // Keep the original edge type (e.g., 'false')
+                    label: inEdge.label,
+                };
+
+                // Remove old outgoing edge
+                const outEdgeIndex = edges.findIndex(e => e.id === outEdge.id);
+                if (outEdgeIndex !== -1) edges.splice(outEdgeIndex, 1);
+
+                // Add bypass edge
+                edges.push(bypassEdge);
+
+                // Update any node that had this node as a child
+                for (const node of nodes) {
+                    if (node.children) {
+                        const idx = node.children.indexOf(passNode.id);
+                        if (idx !== -1) {
+                            node.children[idx] = outEdge.target;
+                        }
+                    }
+                }
+            }
+
+            // Remove the passthrough node
+            const nodeIndex = nodes.findIndex(n => n.id === passNode.id);
+            if (nodeIndex !== -1) {
+                nodes.splice(nodeIndex, 1);
+            }
+
+            // Remove incoming edge
+            const inEdgeIndex = edges.findIndex(e => e.id === inEdge.id);
+            if (inEdgeIndex !== -1) edges.splice(inEdgeIndex, 1);
+        }
+    }
+
+    return { nodes, edges };
 }
 
 function canContinue(nodeId: string, nodes: FlowNode[]): boolean {
@@ -261,22 +322,24 @@ function processStatement(
 
     nodes.push(node);
 
-    // Check for function calls to add edges
+    // Check for function calls to add edges (including recursive calls)
     if (t.isExpressionStatement(statement) || t.isVariableDeclaration(statement) || t.isReturnStatement(statement)) {
-        // Simplified check: look for function names in the statement's label or code
-        // This is a heuristic; a proper AST traversal would be better but this covers direct calls
         functionMap.forEach((funcNode, name) => {
             const callPattern = new RegExp(`\\b${name}\\s*\\(`, 'g');
             const codeSnippet = getCodeForNode(statement, code);
 
-            // Check if this statement calls a known function
             if (callPattern.test(codeSnippet)) {
+                // Check if this is a recursive call (calling itself from within)
+                // We detect this by checking if the current node's line is within the function's body
+                const isRecursive = node.lineNumber >= (funcNode.lineNumber || 0) &&
+                    node.lineNumber <= (funcNode.endLineNumber || 0);
+
                 edges.push({
                     id: `edge_call_${node.id}_${funcNode.id}`,
                     source: node.id,
                     target: funcNode.id,
-                    type: 'call',
-                    label: 'calls'
+                    type: isRecursive ? 'recursive' : 'call',
+                    label: isRecursive ? 'recurse' : 'calls'
                 });
             }
         });
@@ -303,15 +366,23 @@ function processIfStatement(
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>
 ): FlowNode {
-    // Create merge node for after the if
-    const mergeNode: FlowNode = {
-        id: generateNodeId(),
-        type: 'process',
-        label: 'merge',
-        code: '',
-        lineNumber: statement.loc?.end.line || 0,
-    };
-    nodes.push(mergeNode);
+    // Check if both branches terminate (return/throw) - if so, no merge needed
+    const consequentTerminates = branchTerminates(statement.consequent);
+    const alternateTerminates = statement.alternate ? branchTerminates(statement.alternate) : false;
+    const bothTerminate = consequentTerminates && alternateTerminates;
+
+    // Create merge node only if at least one branch doesn't terminate
+    let mergeNode: FlowNode | null = null;
+    if (!bothTerminate) {
+        mergeNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: 'merge',
+            code: '',
+            lineNumber: statement.loc?.end.line || 0,
+        };
+        nodes.push(mergeNode);
+    }
 
     // Process consequent (true branch)
     if (t.isBlockStatement(statement.consequent)) {
@@ -333,7 +404,7 @@ function processIfStatement(
             }
         });
 
-        if (canContinue(prevId, nodes)) {
+        if (mergeNode && canContinue(prevId, nodes)) {
             edges.push({
                 id: `edge_${prevId}_${mergeNode.id}`,
                 source: prevId,
@@ -353,10 +424,10 @@ function processIfStatement(
             });
 
             const lastId = getLastNodeId(stmtNode, nodes, edges);
-            if (canContinue(lastId, nodes)) {
+            if (mergeNode && canContinue(lastId, nodes)) {
                 edges.push({
-                    id: `edge_${stmtNode.id}_${mergeNode.id}`,
-                    source: stmtNode.id, // Should strictly be lastId but for single stmt it's same, safe to use lastId logic if we generalize, but here stmtNode is last
+                    id: `edge_${lastId}_${mergeNode.id}`,
+                    source: lastId,
                     target: mergeNode.id,
                     type: 'normal',
                 });
@@ -385,7 +456,7 @@ function processIfStatement(
                 }
             });
 
-            if (canContinue(prevId, nodes)) {
+            if (mergeNode && canContinue(prevId, nodes)) {
                 edges.push({
                     id: `edge_${prevId}_${mergeNode.id}`,
                     source: prevId,
@@ -413,12 +484,7 @@ function processIfStatement(
                 // MergeIf2 -> MergeIf1.
                 // getLastNodeId(elseIfNode) returns MergeIf2.
                 const lastId = getLastNodeId(elseIfNode, nodes, edges);
-                if (canContinue(lastId, nodes)) {
-                    // But wait, processIfStatement attaches children to merge. 
-                    // So we don't need to do anything if properly recursive?
-                    // Actually, elseIfNode block replaces the Alternate block.
-                    // The Alternate block connects to Merge.
-                    // So YES, we must connect ElseIf's output to current Merge.
+                if (mergeNode && canContinue(lastId, nodes)) {
                     edges.push({
                         id: `edge_${lastId}_${mergeNode.id}`,
                         source: lastId,
@@ -439,10 +505,10 @@ function processIfStatement(
                 });
 
                 const lastId = getLastNodeId(stmtNode, nodes, edges);
-                if (canContinue(lastId, nodes)) {
+                if (mergeNode && canContinue(lastId, nodes)) {
                     edges.push({
-                        id: `edge_${stmtNode.id}_${mergeNode.id}`,
-                        source: stmtNode.id,
+                        id: `edge_${lastId}_${mergeNode.id}`,
+                        source: lastId,
                         target: mergeNode.id,
                         type: 'normal',
                     });
@@ -450,18 +516,43 @@ function processIfStatement(
             }
         }
     } else {
-        // No else branch - connect directly to merge
-        edges.push({
-            id: `edge_${decisionNode.id}_${mergeNode.id}_false`,
-            source: decisionNode.id,
-            target: mergeNode.id,
-            type: 'false',
-            label: 'false',
-        });
+        // No else branch - connect directly to merge if it exists
+        if (mergeNode) {
+            edges.push({
+                id: `edge_${decisionNode.id}_${mergeNode.id}_false`,
+                source: decisionNode.id,
+                target: mergeNode.id,
+                type: 'false',
+                label: 'false',
+            });
+        }
     }
 
-    decisionNode.children = [mergeNode.id];
+    if (mergeNode) {
+        decisionNode.children = [mergeNode.id];
+    }
     return decisionNode;
+}
+
+// Helper function to check if a branch terminates (returns, throws, etc.)
+function branchTerminates(node: t.Statement): boolean {
+    if (t.isReturnStatement(node) || t.isThrowStatement(node)) {
+        return true;
+    }
+    if (t.isBlockStatement(node)) {
+        // Check if the last statement terminates
+        const lastStmt = node.body[node.body.length - 1];
+        if (lastStmt) {
+            return branchTerminates(lastStmt);
+        }
+    }
+    if (t.isIfStatement(node)) {
+        // Both branches must terminate
+        const consequentTerminates = branchTerminates(node.consequent);
+        const alternateTerminates = node.alternate ? branchTerminates(node.alternate) : false;
+        return consequentTerminates && alternateTerminates;
+    }
+    return false;
 }
 
 function processLoopStatement(

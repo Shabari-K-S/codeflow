@@ -17,9 +17,11 @@ CodeFlow is an innovative developer tool that transforms static code into dynami
 - **🎯 Line-by-Line Execution** - Highlight and track code execution in real-time
 - **📊 Dynamic Flowchart Generation** - Automatic flowchart creation from your code
 - **🔄 Control Flow Visualization** - See loops, conditionals, and function calls visually
-- **💾 Variable State Tracking** - Watch variables change with each execution step
+- **� Recursive Call Visualization** - Distinct visual representation for recursive function calls
+- **�💾 Variable State Tracking** - Watch variables change with each execution step
 - **🎨 Syntax Highlighting** - Beautiful code editor with multi-language support
 - **⚡ Call Stack Visualization** - Understand function calls and returns
+- **🧹 Smart Graph Cleanup** - Automatic removal of redundant merge nodes for cleaner flowcharts
 
 ### Advanced Features
 - **🔍 Step-Through Debugging** - Step forward, backward, or jump to breakpoints
