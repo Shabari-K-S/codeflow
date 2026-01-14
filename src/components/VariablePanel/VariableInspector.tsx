@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '../../stores/store';
+import { SplitPane } from '../SplitPane/SplitPane';
 import type { VariableValue } from '../../types';
 import './VariableInspector.css';
 
+// ... (formatValue, getTypeColor, VariableItem helpers remain unchanged) ...
 function formatValue(value: unknown): string {
     if (value === undefined) return 'undefined';
     if (value === null) return 'null';
@@ -69,6 +71,17 @@ function VariableItem({ variable, isNew }: { variable: VariableValue; isNew: boo
 export function VariableInspector() {
     const { trace, currentStepIndex } = useStore();
 
+    // Visibility State
+    const [visibleSections, setVisibleSections] = useState({
+        variables: true,
+        callStack: true,
+        console: true,
+    });
+
+    const toggleSection = (section: keyof typeof visibleSections) => {
+        setVisibleSections(prev => ({ ...prev, [section]: !prev[section] }));
+    };
+
     const { variables, callStack, output } = useMemo(() => {
         if (!trace || currentStepIndex < 0 || currentStepIndex >= trace.steps.length) {
             return { variables: [], callStack: [], output: [] };
@@ -91,90 +104,151 @@ export function VariableInspector() {
         };
     }, [trace, currentStepIndex]);
 
+    // Components for each section
+    const variablesSection = (
+        <div className="inspector-panel">
+            <div className="inspector-panel__header">
+                <span className="inspector-panel__icon">📦</span>
+                <h3>Variables</h3>
+                <span className="inspector-panel__count">{variables.length}</span>
+            </div>
+            <div className="inspector-panel__content">
+                {variables.length === 0 ? (
+                    <div className="inspector-empty">
+                        <span className="inspector-empty__icon">🔍</span>
+                        <p>No variables</p>
+                    </div>
+                ) : (
+                    <AnimatePresence mode="popLayout">
+                        {variables.map(variable => (
+                            <VariableItem
+                                key={variable.name}
+                                variable={variable}
+                                isNew={variable.changed || false}
+                            />
+                        ))}
+                    </AnimatePresence>
+                )}
+            </div>
+        </div>
+    );
+
+    const callStackSection = (
+        <div className="inspector-panel">
+            <div className="inspector-panel__header">
+                <span className="inspector-panel__icon">📚</span>
+                <h3>Call Stack</h3>
+                <span className="inspector-panel__count">{callStack.length}</span>
+            </div>
+            <div className="inspector-panel__content">
+                {callStack.length === 0 ? (
+                    <div className="inspector-empty">
+                        <span className="inspector-empty__icon">🏠</span>
+                        <p>Global scope</p>
+                    </div>
+                ) : (
+                    <div className="call-stack">
+                        {callStack.map((frame, index) => (
+                            <motion.div
+                                key={frame.id}
+                                className={`call-stack__frame ${index === callStack.length - 1 ? 'call-stack__frame--active' : ''}`}
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 10 }}
+                            >
+                                <span className="call-stack__index">{callStack.length - index}</span>
+                                <span className="call-stack__name">{frame.functionName}()</span>
+                                <span className="call-stack__line">:{frame.lineNumber}</span>
+                            </motion.div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const consoleSection = (
+        <div className="inspector-panel inspector-panel--console">
+            <div className="inspector-panel__header">
+                <span className="inspector-panel__icon">💬</span>
+                <h3>Console</h3>
+                <span className="inspector-panel__count">{output.length}</span>
+            </div>
+            <div className="inspector-panel__content inspector-panel__console-content">
+                {output.length === 0 ? (
+                    <div className="inspector-empty">
+                        <span className="inspector-empty__icon">📝</span>
+                        <p>No output</p>
+                    </div>
+                ) : (
+                    output.map((line, index) => (
+                        <div key={index} className="console-line">
+                            <span className="console-line__prefix">&gt;</span>
+                            <span className="console-line__text">{line}</span>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+
+    // Filter visible sections for SplitPane
+    const visiblePanes = [];
+    if (visibleSections.variables) visiblePanes.push(variablesSection);
+    if (visibleSections.callStack) visiblePanes.push(callStackSection);
+    if (visibleSections.console) visiblePanes.push(consoleSection);
+
+    // Key for SplitPane to force re-render on child count change (optional but safer)
+    const splitPaneKey = `split-${visibleSections.variables}-${visibleSections.callStack}-${visibleSections.console}`;
+
     return (
         <div className="variable-inspector">
-            {/* Variables Section */}
-            <div className="inspector-section">
-                <div className="inspector-section__header">
-                    <span className="inspector-section__icon">📦</span>
-                    <h3>Variables</h3>
-                    <span className="inspector-section__count">{variables.length}</span>
-                </div>
-                <div className="inspector-section__content">
-                    {variables.length === 0 ? (
-                        <div className="inspector-empty">
-                            <span className="inspector-empty__icon">🔍</span>
-                            <p>No variables yet</p>
-                        </div>
-                    ) : (
-                        <AnimatePresence mode="popLayout">
-                            {variables.map(variable => (
-                                <VariableItem
-                                    key={variable.name}
-                                    variable={variable}
-                                    isNew={variable.changed || false}
-                                />
-                            ))}
-                        </AnimatePresence>
-                    )}
-                </div>
-            </div>
-
-            {/* Call Stack Section */}
-            <div className="inspector-section">
-                <div className="inspector-section__header">
-                    <span className="inspector-section__icon">📚</span>
-                    <h3>Call Stack</h3>
-                    <span className="inspector-section__count">{callStack.length}</span>
-                </div>
-                <div className="inspector-section__content">
-                    {callStack.length === 0 ? (
-                        <div className="inspector-empty">
-                            <span className="inspector-empty__icon">🏠</span>
-                            <p>Global scope</p>
-                        </div>
-                    ) : (
-                        <div className="call-stack">
-                            {callStack.map((frame, index) => (
-                                <motion.div
-                                    key={frame.id}
-                                    className={`call-stack__frame ${index === callStack.length - 1 ? 'call-stack__frame--active' : ''}`}
-                                    initial={{ opacity: 0, y: -10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: 10 }}
-                                >
-                                    <span className="call-stack__index">{callStack.length - index}</span>
-                                    <span className="call-stack__name">{frame.functionName}()</span>
-                                    <span className="call-stack__line">:{frame.lineNumber}</span>
-                                </motion.div>
-                            ))}
-                        </div>
-                    )}
+            {/* Toolbar */}
+            <div className="inspector-toolbar">
+                <span className="inspector-toolbar__title">Inspector</span>
+                <div className="inspector-toolbar__toggles">
+                    <button
+                        className={`toolbar-toggle ${visibleSections.variables ? 'active' : ''}`}
+                        onClick={() => toggleSection('variables')}
+                        title="Toggle Variables"
+                    >
+                        📦
+                    </button>
+                    <button
+                        className={`toolbar-toggle ${visibleSections.callStack ? 'active' : ''}`}
+                        onClick={() => toggleSection('callStack')}
+                        title="Toggle Call Stack"
+                    >
+                        📚
+                    </button>
+                    <button
+                        className={`toolbar-toggle ${visibleSections.console ? 'active' : ''}`}
+                        onClick={() => toggleSection('console')}
+                        title="Toggle Console"
+                    >
+                        💬
+                    </button>
                 </div>
             </div>
 
-            {/* Console Output Section */}
-            <div className="inspector-section inspector-section--output">
-                <div className="inspector-section__header">
-                    <span className="inspector-section__icon">💬</span>
-                    <h3>Console</h3>
-                    <span className="inspector-section__count">{output.length}</span>
-                </div>
-                <div className="inspector-section__content inspector-section__console">
-                    {output.length === 0 ? (
-                        <div className="inspector-empty">
-                            <span className="inspector-empty__icon">📝</span>
-                            <p>No output yet</p>
-                        </div>
-                    ) : (
-                        output.map((line, index) => (
-                            <div key={index} className="console-line">
-                                <span className="console-line__prefix">&gt;</span>
-                                <span className="console-line__text">{line}</span>
-                            </div>
-                        ))
-                    )}
-                </div>
+            {/* Content Area */}
+            <div className="inspector-content">
+                {visiblePanes.length > 0 ? (
+                    <SplitPane
+                        key={splitPaneKey}
+                        direction="vertical"
+                        // Distribute space equally initially if not persisted
+                        defaultSizes={visiblePanes.map(() => 100 / visiblePanes.length)}
+                        minSizes={visiblePanes.map(() => 40)} // Min pixel height
+                        persistKey={`inspector-vertical-${visiblePanes.length}`}
+                    >
+                        {visiblePanes}
+                    </SplitPane>
+                ) : (
+                    <div className="inspector-empty-state">
+                        <p>Select a panel to view</p>
+                    </div>
+                )}
             </div>
         </div>
     );
