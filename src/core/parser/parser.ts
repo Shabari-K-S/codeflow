@@ -27,12 +27,20 @@ function getNodeLabel(node: t.Node): string {
         return 'if (condition)';
     }
 
-    if (t.isForStatement(node)) {
-        return 'for loop';
+    if (t.isForStatement(node) || t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
+        return 'loop';
     }
 
-    if (t.isWhileStatement(node)) {
-        return 'while loop';
+    if (t.isSwitchStatement(node)) {
+        return 'decision'; // The switch(val) part
+    }
+
+    if (t.isSwitchCase(node)) {
+        return 'decision'; // The case X: part matches or not
+    }
+
+    if (t.isBreakStatement(node)) {
+        return 'process'; // Visually just a connector usually, but we can make it a node
     }
 
     if (t.isReturnStatement(node)) {
@@ -53,8 +61,16 @@ function getNodeLabel(node: t.Node): string {
         }
         if (t.isAssignmentExpression(expr)) {
             const left = t.isIdentifier(expr.left) ? expr.left.name : 'var';
-            return `${left} = ...`;
+            return `${left} ${expr.operator} ...`;
         }
+        if (t.isUpdateExpression(expr)) {
+            const arg = t.isIdentifier(expr.argument) ? expr.argument.name : 'var';
+            return expr.prefix ? `${expr.operator}${arg}` : `${arg}${expr.operator}`;
+        }
+    }
+
+    if (t.isTryStatement(node)) {
+        return 'try';
     }
 
     return node.type;
@@ -62,7 +78,8 @@ function getNodeLabel(node: t.Node): string {
 
 function getNodeType(node: t.Node): FlowNodeType {
     if (t.isFunctionDeclaration(node)) return 'function';
-    if (t.isIfStatement(node)) return 'decision';
+    if (t.isIfStatement(node) || t.isSwitchStatement(node) || t.isSwitchCase(node)) return 'decision';
+    if (t.isTryStatement(node)) return 'decision';
     if (t.isForStatement(node) || t.isWhileStatement(node) || t.isDoWhileStatement(node)) return 'loop';
     if (t.isReturnStatement(node)) return 'return';
     if (t.isExpressionStatement(node)) {
@@ -77,10 +94,19 @@ function getCodeForNode(node: t.Node, code: string): string {
         const lines = code.split('\n');
         const startLine = node.loc.start.line - 1;
         const endLine = node.loc.end.line - 1;
+        const startCol = node.loc.start.column;
+        const endCol = node.loc.end.column;
+
         if (startLine === endLine) {
-            return lines[startLine]?.trim() || '';
+            return lines[startLine]?.substring(startCol, endCol) || '';
         }
-        return lines.slice(startLine, endLine + 1).map(l => l.trim()).join(' ').slice(0, 100);
+
+        // Multi-line: First line from startCol, middle lines full, last line to endCol
+        const firstLine = lines[startLine]?.substring(startCol) || '';
+        const lastLine = lines[endLine]?.substring(0, endCol) || '';
+        const middleLines = lines.slice(startLine + 1, endLine).map(l => l.trim()).join(' ');
+
+        return `${firstLine} ${middleLines} ${lastLine}`.replace(/\s+/g, ' ').trim().slice(0, 100);
     }
     return '';
 }
@@ -97,7 +123,7 @@ export function parseCode(code: string, language: 'javascript' | 'python'): t.Fi
     });
 }
 
-export function generateFlowGraph(ast: t.File): FlowGraph {
+export function generateFlowGraph(ast: t.File, code: string): FlowGraph {
     nodeIdCounter = 0;
     const nodes: FlowNode[] = [];
     const edges: FlowEdge[] = [];
@@ -122,7 +148,7 @@ export function generateFlowGraph(ast: t.File): FlowGraph {
     };
 
     let previousNodeId = startNode.id;
-    const codeString = '';
+    const codeString = code;
 
     // Track function declarations to process their bodies
     const functionBodies: { funcNode: FlowNode; body: t.Statement[] }[] = [];
@@ -242,7 +268,7 @@ export function generateFlowGraph(ast: t.File): FlowGraph {
 // Remove passthrough nodes (merge/loop exit) that only have one incoming and one outgoing edge
 function removeUselessMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNode[], edges: FlowEdge[] } {
     // Find all passthrough-type nodes
-    const passthroughNodes = nodes.filter(n => n.label === 'merge' || n.label === 'loop exit');
+    const passthroughNodes = nodes.filter(n => n.label === 'merge');
 
     for (const passNode of passthroughNodes) {
         // Count incoming and outgoing edges (exclude recursive/call edges which are informational)
@@ -299,7 +325,12 @@ function removeUselessMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes:
 
 function canContinue(nodeId: string, nodes: FlowNode[]): boolean {
     const node = nodes.find(n => n.id === nodeId);
-    return node ? node.type !== 'return' : true;
+    // Break, continue, return, throw stop flow
+    if (!node) return true;
+    if (node.type === 'return') return false;
+    if (node.label === 'break') return false;
+    // continue?
+    return true;
 }
 
 function processStatement(
@@ -310,6 +341,29 @@ function processStatement(
     functionMap: Map<string, FlowNode>
 ): FlowNode | null {
     if (t.isEmptyStatement(statement)) return null;
+
+    if (t.isSwitchStatement(statement)) {
+        return processSwitchStatement(statement, code, nodes, edges, functionMap);
+    }
+
+    // Handle For Loops specially (they have init/update nodes that need custom flow)
+    if (t.isForStatement(statement)) {
+        return processForStatement(statement, code, nodes, edges, functionMap);
+    }
+
+    // Treat break as a process node for now, will link logic later
+    if (t.isBreakStatement(statement)) {
+        const node: FlowNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: 'break',
+            code: 'break;',
+            lineNumber: statement.loc?.start.line || 0,
+            endLineNumber: statement.loc?.end.line || 0,
+        };
+        nodes.push(node);
+        return node;
+    }
 
     const node: FlowNode = {
         id: generateNodeId(),
@@ -351,11 +405,40 @@ function processStatement(
     }
 
     // Handle loops
-    if (t.isForStatement(statement) || t.isWhileStatement(statement)) {
-        return processLoopStatement(statement, node, code, nodes, edges, functionMap);
+    if (t.isWhileStatement(statement)) {
+        return processWhileStatement(statement, node, code, nodes, edges, functionMap);
+    }
+
+    if (t.isDoWhileStatement(statement)) {
+        return processDoWhileStatement(statement, code, nodes, edges, functionMap);
+    }
+
+    if (t.isTryStatement(statement)) {
+        return processTryStatement(statement, code, nodes, edges, functionMap);
     }
 
     return node;
+}
+
+// Helper function to check if a branch terminates (returns, throws, etc.)
+function branchTerminates(node: t.Statement): boolean {
+    if (t.isReturnStatement(node) || t.isThrowStatement(node)) {
+        return true;
+    }
+    if (t.isBlockStatement(node)) {
+        // Check if the last statement terminates
+        const lastStmt = node.body[node.body.length - 1];
+        if (lastStmt) {
+            return branchTerminates(lastStmt);
+        }
+    }
+    if (t.isIfStatement(node)) {
+        // Both branches must terminate
+        const consequentTerminates = branchTerminates(node.consequent);
+        const alternateTerminates = node.alternate ? branchTerminates(node.alternate) : false;
+        return consequentTerminates && alternateTerminates;
+    }
+    return false;
 }
 
 function processIfStatement(
@@ -534,29 +617,177 @@ function processIfStatement(
     return decisionNode;
 }
 
-// Helper function to check if a branch terminates (returns, throws, etc.)
-function branchTerminates(node: t.Statement): boolean {
-    if (t.isReturnStatement(node) || t.isThrowStatement(node)) {
-        return true;
+function processForStatement(
+    statement: t.ForStatement,
+    code: string,
+    nodes: FlowNode[],
+    edges: FlowEdge[],
+    functionMap: Map<string, FlowNode>
+): FlowNode {
+    // 1. Definition/Init Node (Optional)
+    let initNode: FlowNode | null = null;
+    if (statement.init) {
+        initNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: getCodeForNode(statement.init, code),
+            code: getCodeForNode(statement.init, code),
+            lineNumber: statement.loc?.start.line || 0,
+        };
+        nodes.push(initNode);
     }
-    if (t.isBlockStatement(node)) {
-        // Check if the last statement terminates
-        const lastStmt = node.body[node.body.length - 1];
-        if (lastStmt) {
-            return branchTerminates(lastStmt);
+
+    // 2. Loop Condition Node
+    const loopNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'loop',
+        label: statement.test ? `for(${getCodeForNode(statement.test, code)})` : 'for(true)',
+        code: getCodeForNode(statement, code),
+        lineNumber: statement.loc?.start.line || 0,
+    };
+    nodes.push(loopNode);
+
+    // Connect init to loop
+    if (initNode) {
+        edges.push({
+            id: `edge_${initNode.id}_${loopNode.id}`,
+            source: initNode.id,
+            target: loopNode.id,
+            type: 'normal',
+        });
+    }
+
+    // 3. Exit Node
+    const exitNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'loop exit',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(exitNode);
+
+    // 4. Update Node (Optional)
+    let updateNode: FlowNode | null = null;
+    if (statement.update) {
+        updateNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: getCodeForNode(statement.update, code),
+            code: getCodeForNode(statement.update, code),
+            lineNumber: statement.loc?.start.line || 0,
+        };
+        nodes.push(updateNode);
+        // Update connects back to loop
+        edges.push({
+            id: `edge_${updateNode.id}_${loopNode.id}_back`,
+            source: updateNode.id,
+            target: loopNode.id,
+            type: 'loop-back',
+            label: 'repeat',
+        });
+    } else {
+        // If no update, body connects back to loop directly (handled below)
+    }
+
+    // 5. Process Body
+    if (t.isBlockStatement(statement.body)) {
+        let prevId = loopNode.id;
+        let firstInBody = true;
+
+        statement.body.body.forEach(stmt => {
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            if (stmtNode) {
+                edges.push({
+                    id: `edge_${prevId}_${stmtNode.id}`,
+                    source: prevId,
+                    target: stmtNode.id,
+                    type: firstInBody ? 'true' : 'normal',
+                    label: firstInBody ? 'body' : undefined,
+                });
+                prevId = getLastNodeId(stmtNode, nodes, edges);
+                firstInBody = false;
+            }
+        });
+
+        // Loop back logic
+        if (canContinue(prevId, nodes)) {
+            if (updateNode) {
+                // Connect Body End -> Update
+                edges.push({
+                    id: `edge_${prevId}_${updateNode.id}`,
+                    source: prevId,
+                    target: updateNode.id,
+                    type: 'normal',
+                });
+            } else {
+                // Connect Body End -> Loop Condition
+                edges.push({
+                    id: `edge_${prevId}_${loopNode.id}_back`,
+                    source: prevId,
+                    target: loopNode.id,
+                    type: 'loop-back',
+                    label: 'repeat',
+                });
+            }
+        }
+    } else {
+        // Single statement body
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap);
+        if (stmtNode) {
+            edges.push({
+                id: `edge_${loopNode.id}_${stmtNode.id}`,
+                source: loopNode.id,
+                target: stmtNode.id,
+                type: 'true',
+                label: 'body',
+            });
+            const lastId = getLastNodeId(stmtNode, nodes, edges);
+
+            if (canContinue(lastId, nodes)) {
+                if (updateNode) {
+                    edges.push({
+                        id: `edge_${lastId}_${updateNode.id}`,
+                        source: lastId,
+                        target: updateNode.id,
+                        type: 'normal',
+                    });
+                } else {
+                    edges.push({
+                        id: `edge_${lastId}_${loopNode.id}_back`,
+                        source: lastId,
+                        target: loopNode.id,
+                        type: 'loop-back',
+                        label: 'repeat',
+                    });
+                }
+            }
         }
     }
-    if (t.isIfStatement(node)) {
-        // Both branches must terminate
-        const consequentTerminates = branchTerminates(node.consequent);
-        const alternateTerminates = node.alternate ? branchTerminates(node.alternate) : false;
-        return consequentTerminates && alternateTerminates;
+
+    // 6. False -> Exit
+    edges.push({
+        id: `edge_${loopNode.id}_${exitNode.id}`,
+        source: loopNode.id,
+        target: exitNode.id,
+        type: 'false',
+        label: 'false',
+    });
+
+    // Set children for getLastNodeId to work correctly
+    // Both initNode (if exists) and loopNode should point to exitNode
+    // This ensures that when the caller calls getLastNodeId, it returns exitNode.id
+    loopNode.children = [exitNode.id];
+    if (initNode) {
+        initNode.children = [exitNode.id];
     }
-    return false;
+
+    // Return the entry point (Init if exists, otherwise Loop)
+    return initNode || loopNode;
 }
 
-function processLoopStatement(
-    statement: t.ForStatement | t.WhileStatement,
+function processWhileStatement(
+    statement: t.WhileStatement,
     loopNode: FlowNode,
     code: string,
     nodes: FlowNode[],
@@ -611,11 +842,439 @@ function processLoopStatement(
         source: loopNode.id,
         target: exitNode.id,
         type: 'false',
-        label: 'exit',
+        label: 'false',
     });
 
     loopNode.children = [exitNode.id];
     return loopNode;
+}
+
+function processDoWhileStatement(
+    statement: t.DoWhileStatement,
+    code: string,
+    nodes: FlowNode[],
+    edges: FlowEdge[],
+    functionMap: Map<string, FlowNode>
+): FlowNode {
+    // 1. Create Do Node (Entry/Merge point)
+    const doNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'do',
+        code: 'do',
+        lineNumber: statement.loc?.start.line || 0,
+        endLineNumber: statement.loc?.start.line || 0,
+    };
+    nodes.push(doNode);
+
+    // 2. Create Condition Node (Decision at end)
+    const conditionNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'decision',
+        label: `while(${getCodeForNode(statement.test, code)})`,
+        code: getCodeForNode(statement.test, code),
+        lineNumber: statement.loc?.end.line || 0,
+        endLineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(conditionNode);
+
+    // 3. Create Exit Node
+    const exitNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'loop exit',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(exitNode);
+
+    // 4. Process Body
+    if (t.isBlockStatement(statement.body)) {
+        let prevId = doNode.id;
+        let firstInBody = true;
+
+        statement.body.body.forEach(stmt => {
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            if (stmtNode) {
+                edges.push({
+                    id: `edge_${prevId}_${stmtNode.id}`,
+                    source: prevId,
+                    target: stmtNode.id,
+                    type: firstInBody ? 'normal' : 'normal',
+                    label: firstInBody ? undefined : undefined
+                });
+                prevId = getLastNodeId(stmtNode, nodes, edges);
+                firstInBody = false;
+            }
+        });
+
+        // Link Body End to Condition
+        if (canContinue(prevId, nodes)) {
+            edges.push({
+                id: `edge_${prevId}_${conditionNode.id}`,
+                source: prevId,
+                target: conditionNode.id,
+                type: 'normal'
+            });
+        }
+    } else {
+        // Single statement body
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap);
+        if (stmtNode) {
+            edges.push({
+                id: `edge_${doNode.id}_${stmtNode.id}`,
+                source: doNode.id,
+                target: stmtNode.id,
+                type: 'normal'
+            });
+            const lastId = getLastNodeId(stmtNode, nodes, edges);
+            if (canContinue(lastId, nodes)) {
+                edges.push({
+                    id: `edge_${lastId}_${conditionNode.id}`,
+                    source: lastId,
+                    target: conditionNode.id,
+                    type: 'normal'
+                });
+            }
+        }
+    }
+
+    // 5. Condition Edges
+    // True -> Back to Do
+    edges.push({
+        id: `edge_${conditionNode.id}_${doNode.id}_back`,
+        source: conditionNode.id,
+        target: doNode.id,
+        type: 'loop-back',
+        label: 'true'
+    });
+
+    // False -> Exit
+    edges.push({
+        id: `edge_${conditionNode.id}_${exitNode.id}_false`,
+        source: conditionNode.id,
+        target: exitNode.id,
+        type: 'false',
+        label: 'false'
+    });
+
+    doNode.children = [exitNode.id];
+    return doNode;
+}
+
+function processTryStatement(
+    statement: t.TryStatement,
+    code: string,
+    nodes: FlowNode[],
+    edges: FlowEdge[],
+    functionMap: Map<string, FlowNode>
+): FlowNode {
+    // 1. Try Node
+    const tryNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'decision',
+        label: 'try',
+        code: 'try',
+        lineNumber: statement.loc?.start.line || 0,
+        endLineNumber: statement.loc?.start.line || 0,
+    };
+    nodes.push(tryNode);
+
+    // 2. Determine merge point (After Try/Catch)
+    // If Finally exists, it's the merge point for Try/Catch, and it exits to an AfterFinally node.
+
+    const afterNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'end try',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(afterNode);
+
+    // 3. Process Try Block
+    // Connection: TryNode -> Block Start
+    let tryEndId: string | null = null;
+
+    if (t.isBlockStatement(statement.block)) {
+        let prevId = tryNode.id;
+        let firstInBody = true;
+
+        statement.block.body.forEach(stmt => {
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            if (stmtNode) {
+                edges.push({
+                    id: `edge_${prevId}_${stmtNode.id}`,
+                    source: prevId,
+                    target: stmtNode.id,
+                    type: firstInBody ? 'true' : 'normal', // 'true' implies success path
+                    label: firstInBody ? 'try' : undefined
+                });
+                prevId = getLastNodeId(stmtNode, nodes, edges);
+                firstInBody = false;
+            }
+        });
+
+        // Try Block End -> Finally or After
+        tryEndId = prevId;
+    }
+
+    // 4. Process Catch Clause
+    let catchEndId: string | null = null;
+
+    if (statement.handler) {
+        const catchClause = statement.handler;
+        const catchNode: FlowNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: catchClause.param && t.isIdentifier(catchClause.param) ? `catch(${catchClause.param.name})` : 'catch',
+            code: 'catch',
+            lineNumber: catchClause.loc?.start.line || 0,
+        };
+        nodes.push(catchNode);
+
+        // Link Try -> Catch (Exception path)
+        edges.push({
+            id: `edge_${tryNode.id}_${catchNode.id}_error`,
+            source: tryNode.id,
+            target: catchNode.id,
+            type: 'false', // 'false' implies error/exception
+            label: 'error'
+        });
+
+        // Catch Body
+        if (t.isBlockStatement(catchClause.body)) {
+            let prevId = catchNode.id;
+            // let firstInBody = true; // Not strictly needed if catchNode is the start
+
+            catchClause.body.body.forEach(stmt => {
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                if (stmtNode) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: 'normal'
+                    });
+                    prevId = getLastNodeId(stmtNode, nodes, edges);
+                }
+            });
+            catchEndId = prevId;
+        }
+    }
+
+    // 5. Process Finally Block
+    let finallyStartId: string | null = null;
+    let finallyEndId: string | null = null;
+
+    if (statement.finalizer) {
+        const finallyBlock = statement.finalizer;
+        const finallyNode: FlowNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: 'finally',
+            code: 'finally',
+            lineNumber: finallyBlock.loc?.start.line || 0,
+        };
+        nodes.push(finallyNode);
+        finallyStartId = finallyNode.id;
+
+        let prevId = finallyNode.id;
+        if (t.isBlockStatement(finallyBlock)) {
+            finallyBlock.body.forEach(stmt => {
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                if (stmtNode) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: 'normal'
+                    });
+                    prevId = getLastNodeId(stmtNode, nodes, edges);
+                }
+            });
+        }
+        finallyEndId = prevId;
+    }
+
+    // 6. Connect Ends
+    const nextStepId = finallyStartId || afterNode.id;
+
+    // Connect Try Body End -> Next
+    if (tryEndId && canContinue(tryEndId, nodes)) {
+        edges.push({
+            id: `edge_${tryEndId}_${nextStepId}_tryend`,
+            source: tryEndId,
+            target: nextStepId,
+            type: 'normal'
+        });
+    }
+
+    // Connect Catch Body End -> Next
+    if (catchEndId && canContinue(catchEndId, nodes)) {
+        edges.push({
+            id: `edge_${catchEndId}_${nextStepId}_catchend`,
+            source: catchEndId,
+            target: nextStepId,
+            type: 'normal'
+        });
+    }
+
+    // Connect Finally End -> After
+    if (finallyEndId && finallyStartId && canContinue(finallyEndId, nodes)) {
+        // If finally exists, it flows to 'afterNode'.
+        edges.push({
+            id: `edge_${finallyEndId}_${afterNode.id}`,
+            source: finallyEndId,
+            target: afterNode.id,
+            type: 'normal'
+        });
+    }
+
+    // If no finally, try/catch already linked to afterNode (as nextStepId).
+
+    tryNode.children = [afterNode.id];
+    return tryNode;
+}
+
+function processSwitchStatement(
+    statement: t.SwitchStatement,
+    code: string,
+    nodes: FlowNode[],
+    edges: FlowEdge[],
+    functionMap: Map<string, FlowNode>
+): FlowNode {
+    // 1. Create Switch Node
+    const switchNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'decision',
+        label: `switch(${statement.discriminant.type === 'Identifier' ? statement.discriminant.name : '...'})`,
+        code: getCodeForNode(statement, code),
+        lineNumber: statement.loc?.start.line || 0,
+        endLineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(switchNode);
+
+    // 2. Create Merge Node (Exit point)
+    const mergeNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'merge',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(mergeNode);
+
+    let prevCaseCheckId = switchNode.id;
+    // let prevCaseBodyLastId: string | null = null; // Detect fallthrough later
+
+    // 3. Process Cases
+    statement.cases.forEach((caseClause, index) => {
+        // Create Case Check Node
+        const caseLabel = caseClause.test ?
+            `case ${getCodeForNode(caseClause.test, code)}` :
+            'default';
+
+        const caseCheckNode: FlowNode = {
+            id: generateNodeId(),
+            type: 'decision',
+            label: caseLabel,
+            code: getCodeForNode(caseClause, code),
+            lineNumber: caseClause.loc?.start.line || 0,
+        };
+        nodes.push(caseCheckNode);
+
+        // Connect previous check to this case (false/next)
+        edges.push({
+            id: `edge_${prevCaseCheckId}_${caseCheckNode.id}`,
+            source: prevCaseCheckId,
+            target: caseCheckNode.id,
+            type: index === 0 ? 'normal' : 'false',
+            label: index === 0 ? undefined : 'next'
+        });
+
+        // 4. Process Case Body
+        let bodyPrevId = caseCheckNode.id;
+        let isFirstStmt = true;
+
+        if (caseClause.consequent.length > 0) {
+            caseClause.consequent.forEach(stmt => {
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                if (stmtNode) {
+                    // Match found -> Enter body
+                    if (isFirstStmt) {
+                        edges.push({
+                            id: `edge_${caseCheckNode.id}_${stmtNode.id}_match`,
+                            source: caseCheckNode.id,
+                            target: stmtNode.id,
+                            type: 'true',
+                            label: 'match'
+                        });
+                    } else {
+                        edges.push({
+                            id: `edge_${bodyPrevId}_${stmtNode.id}`,
+                            source: bodyPrevId,
+                            target: stmtNode.id,
+                            type: 'normal'
+                        });
+                    }
+                    bodyPrevId = getLastNodeId(stmtNode, nodes, edges);
+                    isFirstStmt = false;
+                }
+            });
+
+            // Handle break/fallthrough
+            if (canContinue(bodyPrevId, nodes)) {
+                // Fallthrough to next case? Or just end here if no more fallthrough logic
+                // If the last statement was NOT a break, we technically fall through
+                // but for visualization, linking to next case body is complex without knowing it ahead.
+                // Simple version: Link to merge node if valid
+                // Actually, correct flow is fallthrough to next case's body start.
+                // prevCaseBodyLastId = bodyPrevId;
+            } else {
+                // It was a break or return
+                if (getLastNodeLabel(bodyPrevId, nodes) === 'break') {
+                    edges.push({
+                        id: `edge_${bodyPrevId}_${mergeNode.id}`,
+                        source: bodyPrevId,
+                        target: mergeNode.id,
+                        type: 'normal',
+                    });
+                }
+                // prevCaseBodyLastId = null;
+            }
+        } else {
+            // Empty case (e.g. case 1: case 2: ...)
+            // Fallthrough intention
+            // prevCaseBodyLastId = caseCheckNode.id;
+        }
+
+        prevCaseCheckId = caseCheckNode.id;
+
+        // Handle Fallthrough from previous case
+        // (Wait, logic above tracks current body exit. How to link NEXT case?
+        // We need to link prevCaseBodyLastId to the START of this case's body... or this case's match?
+        // Typically code flows into the body.
+        // Simplified: Flow into the start of this block or Merge if empty?)
+    });
+
+    // Final default/no-match path connects where?
+    // If last case logic didn't match, we exit switch.
+    edges.push({
+        id: `edge_${prevCaseCheckId}_${mergeNode.id}_nomatch`,
+        source: prevCaseCheckId,
+        target: mergeNode.id,
+        type: 'false',
+        label: 'exit'
+    });
+
+    switchNode.children = [mergeNode.id];
+    return switchNode;
+}
+
+function getLastNodeLabel(nodeId: string, nodes: FlowNode[]): string {
+    const n = nodes.find(n => n.id === nodeId);
+    return n ? n.label : '';
 }
 
 function getLastNodeId(node: FlowNode, _nodes: FlowNode[], _edges: FlowEdge[]): string {

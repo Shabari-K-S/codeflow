@@ -7,8 +7,8 @@ import './FlowChart.css';
 
 const NODE_WIDTH = 140;
 const NODE_HEIGHT = 44;
-const HORIZONTAL_SPACING = 160; // Increased for clearer branch separation
-const VERTICAL_SPACING = 70;   // Reduced for more compact vertical layout
+const HORIZONTAL_SPACING = 160;
+const VERTICAL_SPACING = 70;
 
 interface LayoutNode extends FlowNode {
     x: number;
@@ -29,279 +29,311 @@ interface FlowComponent {
     height: number;
 }
 
-
-// Layout a single connected component with improved decision branch handling
+// Simple BFS-based layout that assigns rows and spreads nodes horizontally
 function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
     if (nodes.length === 0) return [];
 
-    // Build adjacency lists
-    const outgoing = new Map<string, { target: string; type: string }[]>();
+
+
+    // Build outgoing edges map (excluding loop-back and recursive)
+    const outgoing = new Map<string, string[]>();
     const incoming = new Map<string, string[]>();
     nodes.forEach(n => {
         outgoing.set(n.id, []);
         incoming.set(n.id, []);
     });
+
     edges.forEach(e => {
-        if (e.type !== 'loop-back' && e.type !== 'call') {
-            outgoing.get(e.source)?.push({ target: e.target, type: e.type || 'normal' });
+        if (e.type !== 'loop-back' && e.type !== 'recursive' && e.type !== 'call') {
+            outgoing.get(e.source)?.push(e.target);
             incoming.get(e.target)?.push(e.source);
         }
     });
 
-    // Assign rows using topological sort with level assignment
-    const rows = new Map<string, number>();
-    const columns = new Map<string, number>();
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
-    // Find root(s) - nodes with no incoming edges or Start/Function types
-    const incomingCounts = new Map<string, number>();
-    nodes.forEach(n => incomingCounts.set(n.id, incoming.get(n.id)?.length || 0));
+    // Robust Layout: Assign rows using Topological Sort (Kahn's Algorithm)
+    // This naturally handles cycles by breaking them when necessary
+    const nodeRows = new Map<string, number>();
 
-    const roots = nodes.filter(n =>
-        (incomingCounts.get(n.id) === 0) ||
-        n.type === 'start' ||
-        n.type === 'function'
-    );
+    // Copy incoming degrees for processing
+    const inDegrees = new Map<string, number>();
+    nodes.forEach(n => inDegrees.set(n.id, incoming.get(n.id)?.length || 0));
 
-    // BFS to assign rows
-    const queue: { id: string; row: number; col: number }[] = roots.map(r => ({ id: r.id, row: 0, col: 0 }));
-    const visited = new Set<string>(roots.map(r => r.id));
-    roots.forEach(r => {
-        rows.set(r.id, 0);
-        columns.set(r.id, 0);
-    });
+    let queue = nodes.filter(n => (inDegrees.get(n.id) || 0) === 0);
+    let currentRow = 0;
 
-    // Helper to calculate subtree weight (number of nodes reachable before merge/end)
-    // Returns { weight: number, isTerminating: boolean }
-    const getBranchWeight = (startNodeId: string, visited: Set<string>): { weight: number, isTerminating: boolean } => {
-        let count = 0;
-        let terminating = false;
-        const q = [startNodeId];
-        const localVisited = new Set<string>();
+    // Safety limit to prevent infinite loops (should strictly not happen with this algo, but safe guard)
+    let processedCount = 0;
+    const totalNodes = nodes.length;
 
-        while (q.length > 0) {
-            const curr = q.shift()!;
-            if (localVisited.has(curr) || visited.has(curr)) continue;
-            localVisited.add(curr);
-            count++;
+    while (processedCount < totalNodes) {
+        if (queue.length === 0) {
+            // Cycle detected! 
+            // We have nodes left but no roots (all have incoming edges).
+            // Break a cycle: pick a node with lowest in-degree (heuristic) and force it processable
+            const remaining = nodes.filter(n => !nodeRows.has(n.id));
+            if (remaining.length === 0) break; // Should not happen if count logic is right
 
-            const currNode = nodes.find(n => n.id === curr);
-            if (currNode?.type === 'return' || currNode?.type === 'end') {
-                terminating = true;
+            // Sort by lowest rank/degree heuristic
+            remaining.sort((a, b) => (inDegrees.get(a.id) || 0) - (inDegrees.get(b.id) || 0));
+
+            // Force process the first one (treat incoming edges as back-edges)
+            queue.push(remaining[0]);
+            // (We don't need to manually decrement parent degrees for the 'broken' edges because
+            // we are just forcing this node to be placed at the current level)
+        }
+
+        const nextQueue: FlowNode[] = [];
+
+        // Process current level
+        for (const node of queue) {
+            if (nodeRows.has(node.id)) continue; // Already processed
+
+            nodeRows.set(node.id, currentRow);
+            processedCount++;
+
+            const children = outgoing.get(node.id) || [];
+            children.forEach(childId => {
+                const currentDegree = inDegrees.get(childId) || 0;
+                inDegrees.set(childId, currentDegree - 1);
+
+                if (currentDegree - 1 === 0) {
+                    // Find node object
+                    const childNode = nodeMap.get(childId);
+                    if (childNode) nextQueue.push(childNode);
+                }
+            });
+        }
+
+        // Move to next row
+        queue = nextQueue;
+        currentRow++;
+    }
+
+    // --- X-Positioning using "Parent-Guided" heuristic ---
+
+    // Initial State: X=0 for everyone
+    const nodeX = new Map<string, number>();
+    nodes.forEach(n => nodeX.set(n.id, 0));
+
+    // Get max row index
+    let maxRow = 0;
+    nodeRows.forEach(r => maxRow = Math.max(maxRow, r));
+
+    // Process row by row
+    for (let r = 1; r <= maxRow; r++) {
+        const rowNodes = nodes.filter(n => nodeRows.get(n.id) === r);
+
+        // 1. Calculate Ideal X based on parents
+        const idealX = new Map<string, number>();
+
+        rowNodes.forEach(node => {
+            const parents = incoming.get(node.id) || [];
+            if (parents.length === 0) {
+                idealX.set(node.id, 0);
+                return;
             }
 
-            // Stop if we hit a node already in the main visited set (merge point)
+            let weightedSum = 0;
+            let weightTotal = 0;
 
-            const kids = outgoing.get(curr) || [];
-            kids.forEach(k => {
-                if (!localVisited.has(k.target)) q.push(k.target);
+            parents.forEach(pid => {
+                const parentX = nodeX.get(pid) || 0;
+                // Find edge type
+                const edge = edges.find(e => e.source === pid && e.target === node.id);
+
+                if (edge?.type === 'false') {
+                    // False branches: Try to push right
+                    weightedSum += (parentX + NODE_WIDTH + HORIZONTAL_SPACING);
+                    weightTotal += 1;
+                } else if (edge?.type === 'true') {
+                    // True branches: Try to keep straight
+                    weightedSum += parentX;
+                    weightTotal += 2; // Stronger pull
+                } else {
+                    // Normal/other
+                    weightedSum += parentX;
+                    weightTotal += 1;
+                }
             });
 
-            // Limit depth to avoid performance issues
-            if (count > 50) break;
-        }
-        return { weight: count, isTerminating: terminating };
-    };
+            idealX.set(node.id, weightTotal > 0 ? weightedSum / weightTotal : 0);
+        });
 
-    while (queue.length > 0) {
-        const { id, row, col } = queue.shift()!;
-        const node = nodes.find(n => n.id === id);
-        const children = outgoing.get(id) || [];
+        // 2. Sort by Ideal X to determine relative order
+        rowNodes.sort((a, b) => (idealX.get(a.id) || 0) - (idealX.get(b.id) || 0));
 
-        // For decision nodes, spread children horizontally
-        const isDecision = node?.type === 'decision' || node?.type === 'loop';
+        // 3. Place nodes avoiding overlap
+        // We'll place them as close to Ideal X as possible while maintaining Min Distance
+        const minDistance = NODE_WIDTH + HORIZONTAL_SPACING;
 
-        if (isDecision && children.length === 2) {
-            const trueChild = children.find(c => c.type === 'true');
-            const falseChild = children.find(c => c.type === 'false');
+        // Simple sweep: Start from left-most ideal, ensure gap from previous
+        // This can be improved by a center-out sweep, but let's try strict left-to-right first
+        // actually, left-to-right from sort order is safest
 
-            // Different handling for loops vs if-statements
-            const isLoop = node?.type === 'loop';
+        for (let i = 0; i < rowNodes.length; i++) {
+            const node = rowNodes[i];
+            let x = idealX.get(node.id) || 0;
 
-            if (isLoop) {
-                // LOOPS: Body -> LEFT, Exit -> DOWN (Main Flow)
-                if (trueChild && !visited.has(trueChild.target)) {
-                    visited.add(trueChild.target);
-                    rows.set(trueChild.target, row + 1);
-                    columns.set(trueChild.target, col - 1);
-                    queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
-                }
-                if (falseChild && !visited.has(falseChild.target)) {
-                    visited.add(falseChild.target);
-                    rows.set(falseChild.target, row + 1);
-                    columns.set(falseChild.target, col);
-                    queue.push({ id: falseChild.target, row: row + 1, col: col });
-                }
-            } else {
-                // IF/ELSE: Smart Branching
-                // Heavier branch (main logic) -> DOWN
-                // Lighter branch (guard clause/error) -> SIDE
-
-                if (trueChild && falseChild) {
-                    const trueWeight = getBranchWeight(trueChild.target, visited);
-                    const falseWeight = getBranchWeight(falseChild.target, visited);
-
-                    let trueGoesDown = true; // Default
-
-                    // Heuristic: If one is terminating (return) and other isn't, 
-                    // non-terminating goes DOWN.
-                    if (trueWeight.isTerminating && !falseWeight.isTerminating) {
-                        trueGoesDown = false;
-                    } else if (!trueWeight.isTerminating && falseWeight.isTerminating) {
-                        trueGoesDown = true;
-                    } else {
-                        // Otherwise, heavier branch goes DOWN
-                        trueGoesDown = trueWeight.weight >= falseWeight.weight;
-                    }
-
-                    if (trueGoesDown) {
-                        // True -> Down, False -> Right
-                        if (!visited.has(trueChild.target)) {
-                            visited.add(trueChild.target);
-                            rows.set(trueChild.target, row + 1);
-                            columns.set(trueChild.target, col);
-                            queue.push({ id: trueChild.target, row: row + 1, col: col });
-                        }
-                        if (!visited.has(falseChild.target)) {
-                            visited.add(falseChild.target);
-                            rows.set(falseChild.target, row + 1);
-                            columns.set(falseChild.target, col + 1);
-                            queue.push({ id: falseChild.target, row: row + 1, col: col + 1 });
-                        }
-                    } else {
-                        // False -> Down, True -> Left (to balance)
-                        if (!visited.has(falseChild.target)) {
-                            visited.add(falseChild.target);
-                            rows.set(falseChild.target, row + 1);
-                            columns.set(falseChild.target, col);
-                            queue.push({ id: falseChild.target, row: row + 1, col: col });
-                        }
-                        if (!visited.has(trueChild.target)) {
-                            visited.add(trueChild.target);
-                            rows.set(trueChild.target, row + 1);
-                            columns.set(trueChild.target, col - 1);
-                            queue.push({ id: trueChild.target, row: row + 1, col: col - 1 });
-                        }
-                    }
-
-                } else {
-                    // Fallback if missing a child
-                    children.forEach((child, i) => {
-                        if (!visited.has(child.target)) {
-                            visited.add(child.target);
-                            rows.set(child.target, row + 1);
-                            columns.set(child.target, col + i);
-                            queue.push({ id: child.target, row: row + 1, col: col + i });
-                        }
-                    });
-                }
+            if (i > 0) {
+                const prevNode = rowNodes[i - 1];
+                const prevX = nodeX.get(prevNode.id)!;
+                const minX = prevX + minDistance;
+                if (x < minX) x = minX;
             }
-        } else {
-            // Normal sequential flow
-            children.forEach((child, index) => {
-                if (!visited.has(child.target)) {
-                    visited.add(child.target);
-                    rows.set(child.target, row + 1);
-                    columns.set(child.target, col + (index - Math.floor(children.length / 2)));
-                    queue.push({ id: child.target, row: row + 1, col: columns.get(child.target)! });
-                }
+            nodeX.set(node.id, x);
+        }
+
+        // 4. Center the entire row relative to 0?
+        // Or Center relative to parent group?
+        // If we just pushed everything right, the graph drifts right.
+        // Let's re-center the row based on the average X of the *parents* of this row?
+        // No, simpler: Center the row around 0 to keep the graph balanced.
+        if (rowNodes.length > 0) {
+            const currentMin = nodeX.get(rowNodes[0].id)!;
+            const currentMax = nodeX.get(rowNodes[rowNodes.length - 1].id)!;
+            const rowCenter = (currentMin + currentMax) / 2;
+            const shift = -rowCenter; // Shift so center becomes 0
+
+            rowNodes.forEach(n => {
+                nodeX.set(n.id, nodeX.get(n.id)! + shift);
             });
         }
     }
 
-    // Handle unvisited nodes
-    nodes.forEach(n => {
-        if (!rows.has(n.id)) {
-            rows.set(n.id, 0);
-            columns.set(n.id, 0);
-        }
-    });
-
-    // Create layout nodes with positions based on row and column
-    const layoutNodes: LayoutNode[] = nodes.map(node => {
-        const row = rows.get(node.id) || 0;
-        const col = columns.get(node.id) || 0;
-
+    // Convert to LayoutNode
+    return nodes.map(n => {
         return {
-            ...node,
-            x: col * (NODE_WIDTH + HORIZONTAL_SPACING),
-            y: row * (NODE_HEIGHT + VERTICAL_SPACING),
+            ...n,
+            x: nodeX.get(n.id) || 0,
+            y: (nodeRows.get(n.id) || 0) * (NODE_HEIGHT + VERTICAL_SPACING),
             width: NODE_WIDTH,
             height: NODE_HEIGHT,
-            column: col,
-            row,
+            column: 0,
+            row: nodeRows.get(n.id) || 0
         };
     });
-
-    return layoutNodes;
 }
 
-// Remove merge nodes by redirecting edges around them (single-pass with chain resolution)
-function removeMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNode[], edges: FlowEdge[] } {
-    const mergeNodeIds = new Set(nodes.filter(n => n.label === 'merge').map(n => n.id));
 
-    if (mergeNodeIds.size === 0) {
+// Remove passthrough nodes by redirecting edges around them
+function removeMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNode[], edges: FlowEdge[] } {
+    // Identify passthrough nodes to remove
+    const isPassthrough = (n: FlowNode) => {
+        const l = n.label.toLowerCase().trim();
+        return l === 'merge' || l === 'loop exit' || l === '.' || l === '';
+    };
+
+    const passthroughIds = new Set(nodes.filter(isPassthrough).map(n => n.id));
+
+    if (passthroughIds.size === 0) {
         return { nodes, edges };
     }
 
-    // Build a map from merge node ID to its outgoing target
-    const mergeTargets = new Map<string, string>();
-    for (const mergeId of mergeNodeIds) {
-        const outEdge = edges.find(e => e.source === mergeId && e.type !== 'loop-back' && e.type !== 'call');
-        if (outEdge) {
-            mergeTargets.set(mergeId, outEdge.target);
+    // Build edge maps - include ALL edge types except call/recursive
+    const outEdgeMap = new Map<string, FlowEdge>();
+    edges.forEach(e => {
+        if (e.type !== 'call' && e.type !== 'recursive') {
+            // Only store first outgoing edge per node (for bypass)
+            if (!outEdgeMap.has(e.source)) {
+                outEdgeMap.set(e.source, e);
+            }
+        }
+    });
+
+    // Find final target for a passthrough node (follow chains)
+    // Returns target ID and whether any edge in the chain was a loop-back
+    function getFinalTarget(nodeId: string, visited: Set<string>): { target: string, isLoopBack: boolean } | null {
+        if (visited.has(nodeId)) return null; // Cycle
+        visited.add(nodeId);
+
+        const outEdge = outEdgeMap.get(nodeId);
+        if (!outEdge) return null;
+
+        // Check if this hop is a loop-back
+        const isCurrentLoopBack = outEdge.type === 'loop-back';
+
+        if (passthroughIds.has(outEdge.target)) {
+            const result = getFinalTarget(outEdge.target, visited);
+            if (result) {
+                return {
+                    target: result.target,
+                    isLoopBack: isCurrentLoopBack || result.isLoopBack
+                };
+            }
+            return null;
+        }
+        return { target: outEdge.target, isLoopBack: isCurrentLoopBack };
+    }
+
+    // Determine which nodes can be removed (have valid final targets)
+    const removableIds = new Set<string>();
+    const resolvedTargets = new Map<string, { target: string, isLoopBack: boolean }>();
+
+    for (const nodeId of passthroughIds) {
+        const result = getFinalTarget(nodeId, new Set());
+        if (result) {
+            removableIds.add(nodeId);
+            resolvedTargets.set(nodeId, result);
         }
     }
 
-    // Resolve chain: follow merge -> merge -> ... -> final non-merge target
-    function getFinalTarget(mergeId: string, visited: Set<string> = new Set()): string | null {
-        if (visited.has(mergeId)) return null; // Cycle detection
-        visited.add(mergeId);
-
-        const target = mergeTargets.get(mergeId);
-        if (!target) return null;
-
-        // If target is also a merge node, follow the chain
-        if (mergeNodeIds.has(target)) {
-            return getFinalTarget(target, visited);
-        }
-        return target;
+    if (removableIds.size === 0) {
+        return { nodes, edges };
     }
 
+    // Create bypass edges
     const newEdges: FlowEdge[] = [];
     const edgesToRemove = new Set<string>();
+    const createdBypasses = new Set<string>(); // Prevent duplicates
 
-    for (const mergeId of mergeNodeIds) {
-        const incomingEdges = edges.filter(e => e.target === mergeId);
-        const finalTarget = getFinalTarget(mergeId);
+    for (const nodeId of removableIds) {
+        const resolved = resolvedTargets.get(nodeId)!;
 
-        if (finalTarget) {
-            for (const inEdge of incomingEdges) {
+        // Find all edges coming INTO this node
+        const incoming = edges.filter(e => e.target === nodeId && e.type !== 'call' && e.type !== 'recursive');
+
+        for (const inEdge of incoming) {
+            // Skip if source is also being removed
+            if (removableIds.has(inEdge.source)) {
+                edgesToRemove.add(inEdge.id);
+                continue;
+            }
+
+            // Include type and label in key to preserve distinct edges (e.g. True AND False paths)
+            const bypassKey = `${inEdge.source}:${resolved.target}:${inEdge.type}:${inEdge.label}`;
+
+            if (!createdBypasses.has(bypassKey)) {
+                createdBypasses.add(bypassKey);
+
+                // Preserve loop-back type!
+                // If the incoming, outgoing, or chain was a loop-back, the new edge must be a loop-back
+                // to avoid creating cycles in the DAG layout.
+                let newType = inEdge.type;
+                if ((!newType || newType === 'normal') && resolved.isLoopBack) {
+                    newType = 'loop-back';
+                }
+
                 newEdges.push({
-                    id: `edge_bypass_${inEdge.source}_${finalTarget}`,
+                    id: `bypass_${inEdge.source}_${resolved.target}_${inEdge.type}`,
                     source: inEdge.source,
-                    target: finalTarget,
-                    type: inEdge.type,
+                    target: resolved.target,
+                    type: newType,
                     label: inEdge.label,
                 });
-                edgesToRemove.add(inEdge.id);
             }
-        } else {
-            // No valid target - just remove incoming edges
-            for (const inEdge of incomingEdges) {
-                edgesToRemove.add(inEdge.id);
-            }
+            edgesToRemove.add(inEdge.id);
         }
 
-        // Mark all outgoing edges from merge for removal
-        edges.filter(e => e.source === mergeId).forEach(e => edgesToRemove.add(e.id));
+        // Remove outgoing edges from this node (using our map is safer/faster)
+        const outEdge = outEdgeMap.get(nodeId);
+        if (outEdge) edgesToRemove.add(outEdge.id);
     }
 
-    const filteredNodes = nodes.filter(n => !mergeNodeIds.has(n.id));
-    const filteredEdges = edges.filter(e => !edgesToRemove.has(e.id));
-
     return {
-        nodes: filteredNodes,
-        edges: [...filteredEdges, ...newEdges],
+        nodes: nodes.filter(n => !removableIds.has(n.id)),
+        edges: [...edges.filter(e => !edgesToRemove.has(e.id)), ...newEdges],
     };
 }
 
@@ -443,11 +475,17 @@ function generateEdgePath(
               ${target.x + target.width / 2} ${target.y}`;
     }
 
+    // Smoother Bezier Curves
     if (Math.abs(sourceX - targetX) < 5) {
         return `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
     }
 
     const midY = (sourceY + targetY) / 2;
+
+    // Add logic to avoid overlapping vertical lines
+    // If it's a straight drop, use a slight curve? No, straight is fine.
+
+    // For non-straight, use Cubic Bezier with better control points
     return `M ${sourceX} ${sourceY}
           C ${sourceX} ${midY},
             ${targetX} ${midY},
@@ -456,14 +494,14 @@ function generateEdgePath(
 
 function getNodeGradient(type: string): [string, string] {
     switch (type) {
-        case 'start': return ['#22c55e', '#16a34a'];
-        case 'end': return ['#ef4444', '#dc2626'];
-        case 'decision': return ['#f59e0b', '#d97706'];
-        case 'loop': return ['#3b82f6', '#2563eb'];
-        case 'function': return ['#a855f7', '#9333ea'];
-        case 'call': return ['#ec4899', '#db2777'];
-        case 'return': return ['#f97316', '#ea580c'];
-        default: return ['#475569', '#334155'];
+        case 'start': return ['#4ade80', '#22c55e']; // Bright Green
+        case 'end': return ['#f87171', '#ef4444']; // Red
+        case 'decision': return ['#fbbf24', '#d97706']; // Amber
+        case 'loop': return ['#60a5fa', '#2563eb']; // Blue
+        case 'function': return ['#c084fc', '#9333ea']; // Purple
+        case 'call': return ['#f472b6', '#db2777']; // Pink
+        case 'return': return ['#fb923c', '#ea580c']; // Orange
+        default: return ['#94a3b8', '#475569']; // Slate
     }
 }
 
@@ -680,20 +718,20 @@ export function FlowChart() {
                         <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#f97316" />
                     </marker>
 
-                    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-                        <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.3" result="shadow" />
+                    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.5" floodColor="#000" result="shadow" />
                     </filter>
                     <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="8" result="blur" />
-                        <feFlood floodColor="#3b82f6" floodOpacity="0.6" result="color" />
+                        <feGaussianBlur stdDeviation="6" result="blur" />
+                        <feFlood floodColor="#60a5fa" floodOpacity="0.8" result="color" />
                         <feComposite in="color" in2="blur" operator="in" result="shadow" />
                         <feMerge>
                             <feMergeNode in="shadow" />
                             <feMergeNode in="SourceGraphic" />
                         </feMerge>
                     </filter>
-                    <filter id="selected-glow" x="-20%" y="-20%" width="140%" height="140%">
-                        <feDropShadow dx="0" dy="0" stdDeviation="5" floodColor="#60a5fa" floodOpacity="0.5" />
+                    <filter id="selected-glow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feDropShadow dx="0" dy="0" stdDeviation="8" floodColor="#c084fc" floodOpacity="0.6" />
                     </filter>
                 </defs>
 
