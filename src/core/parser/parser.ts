@@ -47,6 +47,10 @@ function getNodeLabel(node: t.Node): string {
         return 'return';
     }
 
+    if (t.isThrowStatement(node)) {
+        return 'throw';
+    }
+
     if (t.isExpressionStatement(node)) {
         const expr = node.expression;
         if (t.isCallExpression(expr)) {
@@ -73,6 +77,14 @@ function getNodeLabel(node: t.Node): string {
         return 'try';
     }
 
+    if (t.isClassDeclaration(node) && node.id) {
+        return `class ${node.id.name}`;
+    }
+
+    if (t.isClassMethod(node) && t.isIdentifier(node.key)) {
+        return node.key.name;
+    }
+
     return node.type;
 }
 
@@ -86,6 +98,8 @@ function getNodeType(node: t.Node): FlowNodeType {
         const expr = node.expression;
         if (t.isCallExpression(expr)) return 'call';
     }
+    if (t.isClassDeclaration(node)) return 'process';
+    if (t.isClassMethod(node)) return 'function';
     return 'process';
 }
 
@@ -127,6 +141,7 @@ export function generateFlowGraph(ast: t.File, code: string): FlowGraph {
     nodeIdCounter = 0;
     const nodes: FlowNode[] = [];
     const edges: FlowEdge[] = [];
+    const variableTypeMap = new Map<string, string>();
 
     // Create start node
     const startNode: FlowNode = {
@@ -176,7 +191,42 @@ export function generateFlowGraph(ast: t.File, code: string): FlowGraph {
             return;
         }
 
-        const flowNode = processStatement(statement, codeString, nodes, edges, functionMap);
+        if (t.isClassDeclaration(statement) && statement.id) {
+            const className = statement.id.name;
+
+            statement.body.body.forEach((member) => {
+                if (t.isClassMethod(member) && t.isIdentifier(member.key)) {
+                    const methodName = member.key.name;
+                    const isConstructor = methodName === 'constructor';
+
+                    const nodeLabel = isConstructor ? `new ${className}()` : `${className}.${methodName}()`;
+                    // For constructor, map class name to this node (so 'new ClassName()' links here)
+                    // For methods, map method name (so 'obj.method()' links here)
+                    // Note: This has collision issues if multiple classes have same method name,
+                    // but simple DSA examples usually don't overlap uniquely naming-wise or it's acceptable limitation.
+                    const mapKey = isConstructor ? className : `${className}.${methodName}`;
+
+                    const methodNode: FlowNode = {
+                        id: generateNodeId(),
+                        type: 'function',
+                        label: nodeLabel,
+                        code: getCodeForNode(member, codeString),
+                        lineNumber: member.loc?.start.line || 0,
+                        endLineNumber: member.loc?.end.line || 0,
+                    };
+                    nodes.push(methodNode);
+                    functionMap.set(mapKey, methodNode);
+
+                    // Store for later processing
+                    if (t.isBlockStatement(member.body)) {
+                        functionBodies.push({ funcNode: methodNode, body: member.body.body });
+                    }
+                }
+            });
+            return;
+        }
+
+        const flowNode = processStatement(statement, codeString, nodes, edges, functionMap, variableTypeMap);
         if (flowNode) {
             edges.push({
                 id: `edge_${previousNodeId}_${flowNode.id}`,
@@ -205,15 +255,17 @@ export function generateFlowGraph(ast: t.File, code: string): FlowGraph {
         let prevId = funcNode.id;
 
         body.forEach((stmt, index) => {
-            const stmtNode = processStatement(stmt, codeString, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, codeString, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
-                edges.push({
-                    id: `edge_${prevId}_${stmtNode.id}`,
-                    source: prevId,
-                    target: stmtNode.id,
-                    type: index === 0 ? 'true' : 'normal',
-                    label: index === 0 ? 'body' : undefined,
-                });
+                if (canContinue(prevId, nodes)) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: index === 0 ? 'true' : 'normal',
+                        label: index === 0 ? 'body' : undefined,
+                    });
+                }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
             }
         });
@@ -329,6 +381,7 @@ function canContinue(nodeId: string, nodes: FlowNode[]): boolean {
     if (!node) return true;
     if (node.type === 'return') return false;
     if (node.label === 'break') return false;
+    if (node.label === 'throw') return false;
     // continue?
     return true;
 }
@@ -338,17 +391,18 @@ function processStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode | null {
     if (t.isEmptyStatement(statement)) return null;
 
     if (t.isSwitchStatement(statement)) {
-        return processSwitchStatement(statement, code, nodes, edges, functionMap);
+        return processSwitchStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
     }
 
     // Handle For Loops specially (they have init/update nodes that need custom flow)
     if (t.isForStatement(statement)) {
-        return processForStatement(statement, code, nodes, edges, functionMap);
+        return processForStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
     }
 
     // Treat break as a process node for now, will link logic later
@@ -365,6 +419,14 @@ function processStatement(
         return node;
     }
 
+    if (t.isDoWhileStatement(statement)) {
+        return processDoWhileStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
+    }
+
+    if (t.isTryStatement(statement)) {
+        return processTryStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
+    }
+
     const node: FlowNode = {
         id: generateNodeId(),
         type: getNodeType(statement),
@@ -376,48 +438,92 @@ function processStatement(
 
     nodes.push(node);
 
-    // Check for function calls to add edges (including recursive calls)
-    if (t.isExpressionStatement(statement) || t.isVariableDeclaration(statement) || t.isReturnStatement(statement)) {
-        functionMap.forEach((funcNode, name) => {
-            const callPattern = new RegExp(`\\b${name}\\s*\\(`, 'g');
-            const codeSnippet = getCodeForNode(statement, code);
-
-            if (callPattern.test(codeSnippet)) {
-                // Check if this is a recursive call (calling itself from within)
-                // We detect this by checking if the current node's line is within the function's body
-                const isRecursive = node.lineNumber >= (funcNode.lineNumber || 0) &&
-                    node.lineNumber <= (funcNode.endLineNumber || 0);
-
-                edges.push({
-                    id: `edge_call_${node.id}_${funcNode.id}`,
-                    source: node.id,
-                    target: funcNode.id,
-                    type: isRecursive ? 'recursive' : 'call',
-                    label: isRecursive ? 'recurse' : 'calls'
-                });
+    // Update variable types if this is a declaration
+    if (t.isVariableDeclaration(statement)) {
+        statement.declarations.forEach(decl => {
+            if (t.isIdentifier(decl.id) && decl.init && t.isNewExpression(decl.init) && t.isIdentifier(decl.init.callee)) {
+                variableTypeMap.set(decl.id.name, decl.init.callee.name);
             }
         });
     }
 
+    // Check for function calls to add edges (including recursive calls)
+    const calledFunctions = findCalledFunctions(statement, variableTypeMap);
+    calledFunctions.forEach(targetName => {
+        const funcNode = functionMap.get(targetName);
+        if (funcNode) {
+            // Check if this is a recursive call (calling itself from within)
+            const isRecursive = node.lineNumber >= (funcNode.lineNumber || 0) &&
+                node.lineNumber <= (funcNode.endLineNumber || 0);
+
+            edges.push({
+                id: `edge_call_${node.id}_${funcNode.id}`,
+                source: node.id,
+                target: funcNode.id,
+                type: isRecursive ? 'recursive' : 'call',
+                label: isRecursive ? 'recurse' : 'calls'
+            });
+        }
+    });
+
     // Handle if statements
     if (t.isIfStatement(statement)) {
-        return processIfStatement(statement, node, code, nodes, edges, functionMap);
+        return processIfStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap);
     }
 
     // Handle loops
     if (t.isWhileStatement(statement)) {
-        return processWhileStatement(statement, node, code, nodes, edges, functionMap);
+        return processWhileStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap);
     }
 
-    if (t.isDoWhileStatement(statement)) {
-        return processDoWhileStatement(statement, code, nodes, edges, functionMap);
-    }
-
-    if (t.isTryStatement(statement)) {
-        return processTryStatement(statement, code, nodes, edges, functionMap);
-    }
+    // Moved DoWhile and Try processing up
 
     return node;
+}
+
+function findCalledFunctions(node: t.Node, variableTypeMap: Map<string, string>): string[] {
+    const called: string[] = [];
+
+    // Simple traversal helper
+    function traverse(n: t.Node) {
+        if (!n) return;
+
+        if (t.isCallExpression(n) || t.isNewExpression(n)) {
+            if (t.isIdentifier(n.callee)) {
+                // simpleFunc() or new Class()
+                called.push(n.callee.name);
+            } else if (t.isMemberExpression(n.callee)) {
+                // obj.method()
+                if (t.isIdentifier(n.callee.object) && t.isIdentifier(n.callee.property)) {
+                    const objName = n.callee.object.name;
+                    const methodName = n.callee.property.name;
+                    const className = variableTypeMap.get(objName);
+                    if (className) {
+                        called.push(`${className}.${methodName}`);
+                    } else {
+                        // Fallback: maybe just method name if collisions were allowed?
+                        // For now strict class matching as per plan.
+                        // But wait, if we call "console.log", we don't want to track it unless mapped.
+                    }
+                }
+            }
+        }
+
+        // Recurse into children
+        // Babel types don't have a generic 'children' property, need to check keys
+        // Being lazy/pragmatic: check common containers
+        if (t.isExpressionStatement(n)) traverse(n.expression);
+        if (t.isVariableDeclaration(n)) n.declarations.forEach(d => { traverse(d.init as t.Node); });
+        // Arguments of calls
+        if ((t.isCallExpression(n) || t.isNewExpression(n)) && n.arguments) {
+            n.arguments.forEach(arg => traverse(arg as t.Node));
+        }
+        if (t.isAssignmentExpression(n)) { traverse(n.right); }
+        // ... add more if needed
+    }
+
+    traverse(node);
+    return called;
 }
 
 // Helper function to check if a branch terminates (returns, throws, etc.)
@@ -447,7 +553,8 @@ function processIfStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // Check if both branches terminate (return/throw) - if so, no merge needed
     const consequentTerminates = branchTerminates(statement.consequent);
@@ -473,15 +580,17 @@ function processIfStatement(
         let firstInBranch = true;
 
         statement.consequent.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
-                edges.push({
-                    id: `edge_${prevId}_${stmtNode.id}`,
-                    source: prevId,
-                    target: stmtNode.id,
-                    type: firstInBranch ? 'true' : 'normal',
-                    label: firstInBranch ? 'true' : undefined,
-                });
+                if (canContinue(prevId, nodes)) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: firstInBranch ? 'true' : 'normal',
+                        label: firstInBranch ? 'true' : undefined,
+                    });
+                }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
                 firstInBranch = false;
             }
@@ -496,7 +605,7 @@ function processIfStatement(
             });
         }
     } else {
-        const stmtNode = processStatement(statement.consequent, code, nodes, edges, functionMap);
+        const stmtNode = processStatement(statement.consequent, code, nodes, edges, functionMap, variableTypeMap);
         if (stmtNode) {
             edges.push({
                 id: `edge_${decisionNode.id}_${stmtNode.id}`,
@@ -525,15 +634,19 @@ function processIfStatement(
             let firstInBranch = true;
 
             statement.alternate.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
                 if (stmtNode) {
-                    edges.push({
-                        id: `edge_${prevId}_${stmtNode.id}`,
-                        source: prevId,
-                        target: stmtNode.id,
-                        type: firstInBranch ? 'false' : 'normal',
-                        label: firstInBranch ? 'false' : undefined,
-                    });
+                    if (canContinue(prevId, nodes)) {
+                        if (canContinue(prevId, nodes)) {
+                            edges.push({
+                                id: `edge_${prevId}_${stmtNode.id}`,
+                                source: prevId,
+                                target: stmtNode.id,
+                                type: firstInBranch ? 'false' : 'normal',
+                                label: firstInBranch ? 'false' : undefined,
+                            });
+                        }
+                    }
                     prevId = getLastNodeId(stmtNode, nodes, edges);
                     firstInBranch = false;
                 }
@@ -549,7 +662,7 @@ function processIfStatement(
             }
         } else if (t.isIfStatement(statement.alternate)) {
             // else if
-            const elseIfNode = processStatement(statement.alternate, code, nodes, edges, functionMap);
+            const elseIfNode = processStatement(statement.alternate, code, nodes, edges, functionMap, variableTypeMap);
             if (elseIfNode) {
                 edges.push({
                     id: `edge_${decisionNode.id}_${elseIfNode.id}`,
@@ -577,7 +690,7 @@ function processIfStatement(
                 }
             }
         } else {
-            const stmtNode = processStatement(statement.alternate, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(statement.alternate, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
                 edges.push({
                     id: `edge_${decisionNode.id}_${stmtNode.id}`,
@@ -622,7 +735,8 @@ function processForStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // 1. Definition/Init Node (Optional)
     let initNode: FlowNode | null = null;
@@ -696,8 +810,9 @@ function processForStatement(
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
+                if (canContinue(prevId, nodes)) {
                 edges.push({
                     id: `edge_${prevId}_${stmtNode.id}`,
                     source: prevId,
@@ -705,6 +820,7 @@ function processForStatement(
                     type: firstInBody ? 'true' : 'normal',
                     label: firstInBody ? 'body' : undefined,
                 });
+                }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
                 firstInBody = false;
             }
@@ -733,7 +849,7 @@ function processForStatement(
         }
     } else {
         // Single statement body
-        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap);
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap);
         if (stmtNode) {
             edges.push({
                 id: `edge_${loopNode.id}_${stmtNode.id}`,
@@ -792,7 +908,8 @@ function processWhileStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // Create exit node for after the loop
     const exitNode: FlowNode = {
@@ -810,7 +927,7 @@ function processWhileStatement(
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
                 edges.push({
                     id: `edge_${prevId}_${stmtNode.id}`,
@@ -854,7 +971,8 @@ function processDoWhileStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // 1. Create Do Node (Entry/Merge point)
     const doNode: FlowNode = {
@@ -894,15 +1012,17 @@ function processDoWhileStatement(
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
-                edges.push({
-                    id: `edge_${prevId}_${stmtNode.id}`,
-                    source: prevId,
-                    target: stmtNode.id,
-                    type: firstInBody ? 'normal' : 'normal',
-                    label: firstInBody ? undefined : undefined
-                });
+                if (canContinue(prevId, nodes)) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: firstInBody ? 'normal' : 'normal',
+                        label: firstInBody ? undefined : undefined
+                    });
+                }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
                 firstInBody = false;
             }
@@ -919,7 +1039,7 @@ function processDoWhileStatement(
         }
     } else {
         // Single statement body
-        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap);
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap);
         if (stmtNode) {
             edges.push({
                 id: `edge_${doNode.id}_${stmtNode.id}`,
@@ -967,7 +1087,8 @@ function processTryStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // 1. Try Node
     const tryNode: FlowNode = {
@@ -1001,15 +1122,17 @@ function processTryStatement(
         let firstInBody = true;
 
         statement.block.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
             if (stmtNode) {
-                edges.push({
-                    id: `edge_${prevId}_${stmtNode.id}`,
-                    source: prevId,
-                    target: stmtNode.id,
-                    type: firstInBody ? 'true' : 'normal', // 'true' implies success path
-                    label: firstInBody ? 'try' : undefined
-                });
+                if (canContinue(prevId, nodes)) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: firstInBody ? 'true' : 'normal', // 'true' implies success path
+                        label: firstInBody ? 'try' : undefined
+                    });
+                }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
                 firstInBody = false;
             }
@@ -1048,14 +1171,16 @@ function processTryStatement(
             // let firstInBody = true; // Not strictly needed if catchNode is the start
 
             catchClause.body.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
                 if (stmtNode) {
+                    if (canContinue(prevId, nodes)) {
                     edges.push({
                         id: `edge_${prevId}_${stmtNode.id}`,
                         source: prevId,
                         target: stmtNode.id,
                         type: 'normal'
                     });
+                    }
                     prevId = getLastNodeId(stmtNode, nodes, edges);
                 }
             });
@@ -1082,14 +1207,16 @@ function processTryStatement(
         let prevId = finallyNode.id;
         if (t.isBlockStatement(finallyBlock)) {
             finallyBlock.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
                 if (stmtNode) {
+                    if (canContinue(prevId, nodes)) {
                     edges.push({
                         id: `edge_${prevId}_${stmtNode.id}`,
                         source: prevId,
                         target: stmtNode.id,
                         type: 'normal'
                     });
+                    }
                     prevId = getLastNodeId(stmtNode, nodes, edges);
                 }
             });
@@ -1142,7 +1269,8 @@ function processSwitchStatement(
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
-    functionMap: Map<string, FlowNode>
+    functionMap: Map<string, FlowNode>,
+    variableTypeMap: Map<string, string>
 ): FlowNode {
     // 1. Create Switch Node
     const switchNode: FlowNode = {
@@ -1199,24 +1327,26 @@ function processSwitchStatement(
 
         if (caseClause.consequent.length > 0) {
             caseClause.consequent.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
                 if (stmtNode) {
                     // Match found -> Enter body
-                    if (isFirstStmt) {
-                        edges.push({
-                            id: `edge_${caseCheckNode.id}_${stmtNode.id}_match`,
-                            source: caseCheckNode.id,
-                            target: stmtNode.id,
-                            type: 'true',
-                            label: 'match'
-                        });
-                    } else {
-                        edges.push({
-                            id: `edge_${bodyPrevId}_${stmtNode.id}`,
-                            source: bodyPrevId,
-                            target: stmtNode.id,
-                            type: 'normal'
-                        });
+                    if (canContinue(bodyPrevId, nodes)) {
+                        if (isFirstStmt) {
+                            edges.push({
+                                id: `edge_${caseCheckNode.id}_${stmtNode.id}_match`,
+                                source: caseCheckNode.id,
+                                target: stmtNode.id,
+                                type: 'true',
+                                label: 'match'
+                            });
+                        } else {
+                            edges.push({
+                                id: `edge_${bodyPrevId}_${stmtNode.id}`,
+                                source: bodyPrevId,
+                                target: stmtNode.id,
+                                type: 'normal'
+                            });
+                        }
                     }
                     bodyPrevId = getLastNodeId(stmtNode, nodes, edges);
                     isFirstStmt = false;

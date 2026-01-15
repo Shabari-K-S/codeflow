@@ -23,6 +23,7 @@ interface InterpreterState {
     stepCount: number;
     breakpoints: number[];
     functions: Map<string, t.FunctionDeclaration>;
+    classes: Map<string, t.ClassDeclaration>;
 }
 
 function createScope(parent: Scope | null = null): Scope {
@@ -138,12 +139,16 @@ export function executeCode(
         stepCount: 0,
         breakpoints,
         functions: new Map(),
+        classes: new Map(),
     };
 
-    // First pass: collect function declarations
+    // First pass: collect function and class declarations
     ast.program.body.forEach(statement => {
         if (t.isFunctionDeclaration(statement) && statement.id) {
             state.functions.set(statement.id.name, statement);
+        }
+        if (t.isClassDeclaration(statement) && statement.id) {
+            state.classes.set(statement.id.name, statement);
         }
     });
 
@@ -302,6 +307,14 @@ function evaluateStatement(
             ? evaluateExpression(statement.argument, state, code)
             : undefined;
         return { isReturn: true, value };
+    }
+
+    if (t.isClassDeclaration(statement)) {
+        // Already collected in first pass, but we might want to step on it?
+        // Or just return undefined.
+        // Let's add a step for the class declaration itself so it shows up
+        // (Step was added at top of evaluateStatement function)
+        return undefined;
     }
 
     if (t.isBlockStatement(statement)) {
@@ -466,8 +479,170 @@ function evaluateExpression(
         return undefined;
     }
 
+    if (t.isThisExpression(expression)) {
+        return lookupVariable(state.scope, 'this');
+    }
+
+    if (t.isNewExpression(expression)) {
+        if (!t.isIdentifier(expression.callee)) {
+            throw new Error('Only identifier-based class instantiation is supported');
+        }
+
+        const className = expression.callee.name;
+        const classDecl = state.classes.get(className);
+
+        if (!classDecl) {
+            throw new Error(`Class ${className} not found`);
+        }
+
+        const args = expression.arguments.map(arg => {
+            if (t.isExpression(arg)) {
+                return evaluateExpression(arg, state, code);
+            }
+            return undefined;
+        });
+
+        // Create instance
+        const instance: Record<string, unknown> = {
+            __className: className
+        };
+
+        // Find constructor
+        let constructor: t.ClassMethod | undefined;
+        classDecl.body.body.forEach(member => {
+            if (t.isClassMethod(member) && t.isIdentifier(member.key) && member.key.name === 'constructor') {
+                constructor = member;
+            }
+        });
+
+        if (constructor) {
+            if (state.callStack.length >= MAX_CALL_DEPTH) {
+                throw new Error('Maximum call stack depth exceeded.');
+            }
+
+            const funcScope = createScope(state.scope);
+
+            // Bind 'this'
+            declareVariable(funcScope, 'this', instance);
+
+            // Bind params
+            constructor.params.forEach((param, i) => {
+                if (t.isIdentifier(param)) {
+                    declareVariable(funcScope, param.name, args[i]);
+                }
+            });
+
+            const frame: CallFrame = {
+                id: `frame_${state.callStack.length}`,
+                functionName: `${className}.constructor`,
+                lineNumber: expression.loc?.start.line || 0,
+                variables: new Map(),
+            };
+            funcScope.variables.forEach((value, name) => {
+                frame.variables.set(name, { name, value, type: getVariableType(value) });
+            });
+            state.callStack.push(frame);
+
+            const previousScope = state.scope;
+            state.scope = funcScope;
+
+            // Execute constructor body
+            if (constructor.body) {
+                for (const stmt of constructor.body.body) {
+                    const result = evaluateStatement(stmt, state, code);
+                    if (result && typeof result === 'object' && 'isReturn' in result) {
+                        break;
+                    }
+                }
+            }
+
+            state.scope = previousScope;
+            state.callStack.pop();
+        }
+
+        return instance;
+    }
+
     if (t.isCallExpression(expression)) {
         const calleeNode = expression.callee;
+
+        // Handle method call (obj.method())
+        if (t.isMemberExpression(calleeNode)) {
+            const obj = evaluateExpression(calleeNode.object, state, code) as Record<string, unknown>;
+            const prop = t.isIdentifier(calleeNode.property)
+                ? calleeNode.property.name
+                : evaluateExpression(calleeNode.property as t.Expression, state, code) as string;
+
+            if (obj && obj.__className) {
+                const className = obj.__className as string;
+                const classDecl = state.classes.get(className);
+
+                if (classDecl) {
+                    // Find method
+                    let method: t.ClassMethod | undefined;
+                    classDecl.body.body.forEach(member => {
+                        if (t.isClassMethod(member) && t.isIdentifier(member.key) && member.key.name === prop) {
+                            method = member;
+                        }
+                    });
+
+                    if (method) {
+                        const args = expression.arguments.map(arg => {
+                            if (t.isExpression(arg)) {
+                                return evaluateExpression(arg, state, code);
+                            }
+                            return undefined;
+                        });
+
+                        if (state.callStack.length >= MAX_CALL_DEPTH) {
+                            throw new Error('Maximum call stack depth exceeded.');
+                        }
+
+                        const funcScope = createScope(state.scope);
+
+                        // Bind 'this'
+                        declareVariable(funcScope, 'this', obj);
+
+                        // Bind params
+                        method.params.forEach((param, i) => {
+                            if (t.isIdentifier(param)) {
+                                declareVariable(funcScope, param.name, args[i]);
+                            }
+                        });
+
+                        const frame: CallFrame = {
+                            id: `frame_${state.callStack.length}`,
+                            functionName: `${className}.${prop}`,
+                            lineNumber: expression.loc?.start.line || 0,
+                            variables: new Map(),
+                        };
+                        funcScope.variables.forEach((value, name) => {
+                            frame.variables.set(name, { name, value, type: getVariableType(value) });
+                        });
+                        state.callStack.push(frame);
+
+                        const previousScope = state.scope;
+                        state.scope = funcScope;
+
+                        let returnValue: unknown = undefined;
+                        if (method.body) {
+                            for (const stmt of method.body.body) {
+                                const result = evaluateStatement(stmt, state, code);
+                                if (result && typeof result === 'object' && 'isReturn' in result) {
+                                    returnValue = (result as { isReturn: boolean; value: unknown }).value;
+                                    break;
+                                }
+                            }
+                        }
+
+                        state.scope = previousScope;
+                        state.callStack.pop();
+                        return returnValue;
+                    }
+                }
+            }
+        }
+
         let callee: unknown;
         if (t.isExpression(calleeNode)) {
             callee = evaluateExpression(calleeNode, state, code);
