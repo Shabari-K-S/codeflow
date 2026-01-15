@@ -172,3 +172,19 @@
     background-color: var(--color-error-bg);
     color: var(--color-error);
 }
+
+.github-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+    padding: var(--space-1);
+    border-radius: var(--radius-full);
+    transition: all var(--transition-fast);
+}
+
+.github-btn:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-elevated);
+    transform: scale(1.1);
+}
