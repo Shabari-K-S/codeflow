@@ -529,13 +529,13 @@ function processStatement(
 
     // Handle For Loops specially (they have init/update nodes that need custom flow)
     if (t.isForStatement(statement)) {
-        return processForStatement(statement, code, nodes, edges, functionMap, variableTypeMap, undefined, language);
+        return processForStatement(statement, code, nodes, edges, functionMap, variableTypeMap, language);
     }
 
     // Handle Python For loops (ForInStatement)
     if (statement.type === 'ForInStatement' || t.isForInStatement(statement)) {
         // @ts-ignore
-        return processForInStatement(statement as t.ForInStatement, code, nodes, edges, functionMap, variableTypeMap, loopContext, language);
+        return processForInStatement(statement as t.ForInStatement, code, nodes, edges, functionMap, variableTypeMap, language);
     }
 
     // Treat break as a process node for now, will link logic later
@@ -586,7 +586,7 @@ function processStatement(
     }
 
     if (t.isDoWhileStatement(statement)) {
-        return processDoWhileStatement(statement, code, nodes, edges, functionMap, variableTypeMap, loopContext, language);
+        return processDoWhileStatement(statement, code, nodes, edges, functionMap, variableTypeMap, language);
     }
 
     if (t.isTryStatement(statement)) {
@@ -640,7 +640,7 @@ function processStatement(
 
     // Handle loops
     if (t.isWhileStatement(statement)) {
-        return processWhileStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap, loopContext, language);
+        return processWhileStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap, language);
     }
 
     return node;
@@ -877,7 +877,7 @@ function processForStatement(
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
     variableTypeMap: Map<string, string>,
-    loopContext?: LoopContext, // Not inherited, For creates a NEW context
+    // loopContext?: LoopContext, // Not inherited, For creates a NEW context
     language: string = 'javascript'
 ): FlowNode {
     // 1. Definition/Init Node (Optional)
@@ -1048,7 +1048,7 @@ function processWhileStatement(
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
     variableTypeMap: Map<string, string>,
-    loopContext?: LoopContext, // New context
+    // loopContext?: LoopContext, // New context
     language: string = 'javascript'
 ): FlowNode {
     // Create exit node for after the loop
@@ -1141,7 +1141,7 @@ function processDoWhileStatement(
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
     variableTypeMap: Map<string, string>,
-    loopContext?: LoopContext,
+    // loopContext?: LoopContext,
     language: string = 'javascript'
 ): FlowNode {
     // 1. Create Do Node (Entry/Merge point)
@@ -1603,7 +1603,7 @@ function processForInStatement(
     functionMap: Map<string, FlowNode>,
     variableTypeMap: Map<string, string>,
 
-    loopContext?: LoopContext,
+    // loopContext?: LoopContext,
     language: string = 'javascript'
 ): FlowNode {
     // 1. Loop Node
