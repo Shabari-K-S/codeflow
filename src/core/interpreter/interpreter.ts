@@ -624,7 +624,7 @@ function evaluateExpression(
     state: InterpreterState,
     code: string
 ): unknown {
-    if (expression.type === 'Literal') {
+    if ((expression as any).type === 'Literal') {
         return (expression as any).value;
     }
 
@@ -807,7 +807,7 @@ function evaluateExpression(
                 constructor = lookupVariable(state.scope, className);
             }
         } else {
-            constructor = evaluateExpression(expression.callee, state, code);
+            constructor = evaluateExpression(expression.callee as t.Expression, state, code);
         }
 
         const args = expression.arguments.map(arg => {
