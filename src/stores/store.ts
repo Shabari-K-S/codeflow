@@ -20,6 +20,18 @@ let result = fibonacci(5);
 console.log("Result:", result);
 `;
 
+const DEFAULT_PYTHON_CODE = `# Welcome to CodeFlow! 🌊
+# Paste your code here and click "Visualize"
+
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+result = fibonacci(5)
+print("Result:", result)
+`;
+
 export const useStore = create<CodeFlowState>((set, get) => ({
     // === State ===
     code: DEFAULT_CODE,
@@ -40,7 +52,25 @@ export const useStore = create<CodeFlowState>((set, get) => ({
     },
 
     setLanguage: (language: 'javascript' | 'python') => {
-        set({ language, flowGraph: null, trace: null, currentStepIndex: -1, playbackState: 'idle' });
+        const currentCode = get().code;
+        const isDefaultJS = currentCode === DEFAULT_CODE;
+        const isDefaultPy = currentCode === DEFAULT_PYTHON_CODE;
+
+        let newCode = currentCode;
+        if (language === 'python' && (isDefaultJS || currentCode === '')) {
+            newCode = DEFAULT_PYTHON_CODE;
+        } else if (language === 'javascript' && (isDefaultPy || currentCode === '')) {
+            newCode = DEFAULT_CODE;
+        }
+
+        set({
+            language,
+            code: newCode,
+            flowGraph: null,
+            trace: null,
+            currentStepIndex: -1,
+            playbackState: 'idle'
+        });
     },
 
     toggleBreakpoint: (line: number) => {
@@ -58,7 +88,7 @@ export const useStore = create<CodeFlowState>((set, get) => ({
         const { code, language } = get();
         try {
             const ast = parseCode(code, language);
-            const flowGraph = generateFlowGraph(ast, code);
+            const flowGraph = generateFlowGraph(ast, code, language);
             set({ flowGraph, parseError: null });
         } catch (error) {
             set({

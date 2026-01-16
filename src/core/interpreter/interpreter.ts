@@ -1,5 +1,6 @@
 import * as parser from '@babel/parser';
 import * as t from '@babel/types';
+import { parsePythonCode } from '../parser/pythonParser.ts';
 import type {
     ExecutionTrace,
     ExecutionStep,
@@ -10,11 +11,6 @@ import type {
 const MAX_ITERATIONS = 10000;
 const MAX_CALL_DEPTH = 100;
 
-interface Scope {
-    variables: Map<string, unknown>;
-    parent: Scope | null;
-}
-
 interface InterpreterState {
     scope: Scope;
     callStack: CallFrame[];
@@ -24,6 +20,70 @@ interface InterpreterState {
     breakpoints: number[];
     functions: Map<string, t.FunctionDeclaration>;
     classes: Map<string, t.ClassDeclaration>;
+}
+
+interface Scope {
+    variables: Map<string, unknown>;
+    parent: Scope | null;
+}
+
+// Helper classes for Python Runtime
+class PythonList {
+    items: any[];
+
+    constructor(...args: any[]) {
+        this.items = [];
+        // Handle both new PythonList([1, 2]) and new PythonList(1, 2)
+        if (args.length === 1 && Array.isArray(args[0])) {
+            this.items.push(...args[0]);
+        } else {
+            this.items.push(...args);
+        }
+    }
+
+    append(item: any) {
+        this.items.push(item);
+    }
+
+    push(...items: any[]) {
+        this.items.push(...items);
+        return this.items.length;
+    }
+
+    forEach(callback: (value: any, index: number, array: any[]) => void) {
+        this.items.forEach(callback);
+    }
+
+    map(callback: (value: any, index: number, array: any[]) => any) {
+        return this.items.map(callback);
+    }
+
+    toJSON() {
+        return this.items;
+    }
+
+    [Symbol.iterator]() {
+        return this.items[Symbol.iterator]();
+    }
+
+    get length() {
+        return this.items.length;
+    }
+
+    toString() {
+        return this.items.toString();
+    }
+}
+
+class PythonDict {
+    [key: string]: any;
+    constructor(...pairs: any[][]) {
+        pairs.forEach(pair => {
+            if (Array.isArray(pair) && pair.length >= 2) {
+                this[String(pair[0])] = pair[1];
+            }
+        });
+    }
 }
 
 function createScope(parent: Scope | null = null): Scope {
@@ -65,6 +125,7 @@ function getVariableType(value: unknown): string {
     if (value === null) return 'null';
     if (value === undefined) return 'undefined';
     if (Array.isArray(value)) return 'array';
+    if (value instanceof PythonList) return 'list';
     return typeof value;
 }
 
@@ -75,11 +136,17 @@ function collectVariables(scope: Scope): VariableValue[] {
 
     while (currentScope) {
         currentScope.variables.forEach((value, name) => {
-            if (!seen.has(name)) {
+            // Filter out internal Python runtime variables and private vars
+            if (!seen.has(name) && !name.startsWith('__')) {
                 seen.add(name);
+                let displayValue = value;
+                if (value instanceof PythonList) {
+                    displayValue = value.items;
+                }
+
                 variables.push({
                     name,
-                    value,
+                    value: displayValue,
                     type: getVariableType(value),
                 });
             }
@@ -116,20 +183,60 @@ function addStep(state: InterpreterState, node: t.Node): void {
     state.steps.push(step);
 }
 
+function isExpressionOrLiteral(node: t.Node | null | undefined): boolean {
+    if (!node) return false;
+    if (!node) return false;
+    return t.isExpression(node) || t.isLiteral(node) || (node as any).type === 'Literal';
+}
+
+function shouldIgnoreStep(statement: t.Statement): boolean {
+    // Ignore internal variable declarations (filbert generated)
+    if (t.isVariableDeclaration(statement)) {
+        return statement.declarations.some(decl =>
+            t.isIdentifier(decl.id) && decl.id.name.startsWith('__')
+        );
+    }
+
+    // Ignore internal if checks (parameter validation)
+    if (t.isIfStatement(statement)) {
+        // Check if test condition involves internal variables
+        if (t.isBinaryExpression(statement.test)) {
+            if (t.isIdentifier(statement.test.left) && statement.test.left.name.startsWith('__')) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 export function executeCode(
     code: string,
     language: 'javascript' | 'python',
     breakpoints: number[] = []
 ): ExecutionTrace {
-    if (language === 'python') {
-        throw new Error('Python support coming soon');
-    }
 
-    const ast = parser.parse(code, {
-        sourceType: 'module',
-        plugins: ['jsx', 'typescript'],
-        errorRecovery: true,
-    });
+    let ast: t.File;
+
+    try {
+        if (language === 'python') {
+            ast = parsePythonCode(code);
+        } else {
+            ast = parser.parse(code, {
+                sourceType: 'module',
+                plugins: ['jsx', 'typescript'],
+                errorRecovery: true,
+            });
+        }
+    } catch (error) {
+        return {
+            steps: [],
+            totalSteps: 0,
+            hasError: true,
+            errorMessage: error instanceof Error ? error.message : 'Parse error',
+            output: [],
+        };
+    }
 
     const state: InterpreterState = {
         scope: createScope(),
@@ -159,6 +266,137 @@ export function executeCode(
         },
     };
     declareVariable(state.scope, 'console', consoleObj);
+
+    // Python Runtime Support
+    if (language === 'python') {
+        const pythonRuntime = {
+            objects: {
+                list: PythonList,
+                dict: PythonDict,
+            },
+            ops: {
+                add: (a: any, b: any) => a + b,
+                subtract: (a: any, b: any) => a - b,
+                multiply: (a: any, b: any) => a * b,
+                divide: (a: any, b: any) => a / b,
+                floorDivide: (a: any, b: any) => Math.floor(a / b),
+                mod: (a: any, b: any) => a % b,
+                pow: (a: any, b: any) => Math.pow(a, b),
+                eq: (a: any, b: any) => a == b,
+                ne: (a: any, b: any) => a != b,
+                lt: (a: any, b: any) => a < b,
+                lte: (a: any, b: any) => a <= b,
+                gt: (a: any, b: any) => a > b,
+                gte: (a: any, b: any) => a >= b,
+                in: (a: any, b: any) => {
+                    if (Array.isArray(b)) return b.includes(a);
+                    if (b instanceof PythonList) return b.items.includes(a);
+                    if (typeof b === 'object' && b !== null) return a in b; // Check keys
+                    return false;
+                },
+                notIn: (a: any, b: any) => {
+                    if (Array.isArray(b)) return !b.includes(a);
+                    if (b instanceof PythonList) return !b.items.includes(a);
+                    if (typeof b === 'object' && b !== null) return !(a in b);
+                    return true;
+                },
+                is: (a: any, b: any) => Object.is(a, b),
+                isNot: (a: any, b: any) => !Object.is(a, b),
+                and: (a: any, b: any) => a && b,
+                or: (a: any, b: any) => a || b,
+                not: (a: any) => !a,
+                usub: (a: any) => -a,
+                uadd: (a: any) => +a,
+                subscriptIndex: (obj: any, key: any) => {
+                    return obj[key];
+                },
+            },
+            functions: {
+                print: (...args: any[]) => {
+                    const output = args.map(arg => {
+                        if (Array.isArray(arg)) {
+                            return JSON.stringify(arg);
+                        }
+                        if (typeof arg === 'object' && arg !== null) {
+                            if (arg instanceof PythonList || (arg.constructor && arg.constructor.name === 'PythonDict')) {
+                                return JSON.stringify(arg);
+                            }
+                            // Plain object (dict)
+                            return JSON.stringify(arg);
+                        }
+                        return String(arg);
+                    }).join(' ');
+                    state.output.push(output);
+                },
+                range: (start: number, stop?: number, step: number = 1) => {
+                    if (stop === undefined) {
+                        stop = start;
+                        start = 0;
+                    }
+                    const result = new PythonList();
+                    for (let i = start; minCheck(i, stop, step); i += step) {
+                        result.push(i);
+                    }
+                    return result;
+
+                    function minCheck(curr: number, end: number, s: number) {
+                        return s > 0 ? curr < end : curr > end;
+                    }
+                },
+                len: (obj: any) => {
+                    if (Array.isArray(obj) || typeof obj === 'string') return obj.length;
+                    if (obj instanceof PythonList) return obj.length;
+                    if (obj instanceof Set || obj instanceof Map) return obj.size;
+                    if (typeof obj === 'object' && obj !== null) return Object.keys(obj).length;
+                    return 0;
+                },
+                str: (obj: any) => {
+                    if (obj instanceof PythonList) return JSON.stringify(obj.items);
+                    if (typeof obj === 'object' && obj !== null) return JSON.stringify(obj);
+                    return String(obj);
+                },
+                int: (obj: any) => {
+                    return parseInt(obj, 10);
+                },
+                float: (obj: any) => {
+                    return parseFloat(obj);
+                },
+                abs: (obj: any) => Math.abs(obj),
+                min: (...args: any[]) => {
+                    if (args.length === 1 && (Array.isArray(args[0]) || args[0] instanceof PythonList)) {
+                        const arr = args[0] instanceof PythonList ? args[0].items : args[0];
+                        return Math.min(...arr);
+                    }
+                    return Math.min(...args);
+                },
+                max: (...args: any[]) => {
+                    if (args.length === 1 && (Array.isArray(args[0]) || args[0] instanceof PythonList)) {
+                        const arr = args[0] instanceof PythonList ? args[0].items : args[0];
+                        return Math.max(...arr);
+                    }
+                    return Math.max(...args);
+                },
+                type: (obj: any) => {
+                    if (obj === null) return 'NoneType';
+                    if (obj instanceof PythonList) return 'list';
+                    if (Array.isArray(obj)) return 'list';
+                    if (typeof obj === 'object') return 'dict';
+                    return typeof obj;
+                },
+                bool: (obj: any) => Boolean(obj),
+                sum: (arr: any) => {
+                    const items = arr instanceof PythonList ? arr.items : arr;
+                    return items.reduce((a: number, b: number) => a + b, 0);
+                }
+            }
+        };
+        declareVariable(state.scope, '__pythonRuntime', pythonRuntime);
+
+        // Expose Python built-ins to global scope
+        Object.entries(pythonRuntime.functions).forEach(([name, func]) => {
+            declareVariable(state.scope, name, func);
+        });
+    }
 
     try {
         // Execute program
@@ -190,7 +428,9 @@ function evaluateStatement(
     state: InterpreterState,
     code: string
 ): unknown {
-    addStep(state, statement);
+    if (!shouldIgnoreStep(statement)) {
+        addStep(state, statement);
+    }
 
     if (t.isVariableDeclaration(statement)) {
         statement.declarations.forEach(decl => {
@@ -254,7 +494,7 @@ function evaluateStatement(
             if (statement.test) {
                 addStep(state, statement);
                 const condition = evaluateExpression(statement.test, state, code);
-                if (!condition) break;
+                if (Boolean(statement.test) && !condition) break;
             }
 
             // Execute body
@@ -327,6 +567,55 @@ function evaluateStatement(
         return undefined;
     }
 
+    // Support ForOfStatement in case filbert generates it
+    // Handle ForInStatement as well (treating it as value iteration for Python compatibility)
+    if (t.isForOfStatement(statement) || t.isForInStatement(statement)) {
+        const right = evaluateExpression(statement.right, state, code);
+
+        // Ensure right is iterable
+        if (right == null || typeof (right as any)[Symbol.iterator] !== 'function') {
+            throw new Error('Right side of for-of/in is not iterable');
+        }
+
+        let iterations = 0;
+        // Iterate
+        for (const value of (right as Iterable<unknown>)) {
+            if (iterations++ > MAX_ITERATIONS) {
+                throw new Error('Maximum loop iterations exceeded. Possible infinite loop.');
+            }
+
+            // Assign to left
+            if (t.isVariableDeclaration(statement.left)) {
+                // let x of ...
+                const decl = statement.left.declarations[0];
+                if (t.isIdentifier(decl.id)) {
+                    declareVariable(state.scope, decl.id.name, value);
+                }
+            } else if (t.isIdentifier(statement.left)) {
+                setVariable(state.scope, statement.left.name, value);
+            } else if (t.isMemberExpression(statement.left)) {
+                const obj = evaluateExpression(statement.left.object, state, code) as Record<string, unknown>;
+                const prop = t.isIdentifier(statement.left.property) ? statement.left.property.name : evaluateExpression(statement.left.property as t.Expression, state, code);
+                if (obj) obj[prop as string] = value;
+            }
+
+            addStep(state, statement);
+
+            // Execute body
+            if (t.isBlockStatement(statement.body)) {
+                for (const stmt of statement.body.body) {
+                    const result = evaluateStatement(stmt, state, code);
+                    if (result && typeof result === 'object' && 'isReturn' in result) {
+                        return result;
+                    }
+                }
+            } else {
+                evaluateStatement(statement.body, state, code);
+            }
+        }
+        return undefined;
+    }
+
     return undefined;
 }
 
@@ -335,6 +624,10 @@ function evaluateExpression(
     state: InterpreterState,
     code: string
 ): unknown {
+    if (expression.type === 'Literal') {
+        return (expression as any).value;
+    }
+
     if (t.isNumericLiteral(expression)) {
         return expression.value;
     }
@@ -356,13 +649,20 @@ function evaluateExpression(
     }
 
     if (t.isArrayExpression(expression)) {
-        return expression.elements.map(el => {
+        const elements = expression.elements.map(el => {
             if (el === null) return undefined;
             if (t.isSpreadElement(el)) {
                 return evaluateExpression(el.argument, state, code);
             }
             return evaluateExpression(el, state, code);
         });
+
+        // If Python Runtime is active, return PythonList instead of native Array
+        if (lookupVariable(state.scope, '__pythonRuntime')) {
+            return new PythonList(elements);
+        }
+
+        return elements;
     }
 
     if (t.isObjectExpression(expression)) {
@@ -374,12 +674,20 @@ function evaluateExpression(
                     : t.isStringLiteral(prop.key)
                         ? prop.key.value
                         : String(prop.key);
-                obj[key] = t.isExpression(prop.value)
-                    ? evaluateExpression(prop.value, state, code)
+                obj[key] = isExpressionOrLiteral(prop.value as t.Node)
+                    ? evaluateExpression(prop.value as t.Expression, state, code)
                     : undefined;
             }
         });
         return obj;
+    }
+
+    if (t.isSequenceExpression(expression)) {
+        let result: unknown;
+        expression.expressions.forEach(expr => {
+            result = evaluateExpression(expr, state, code);
+        });
+        return result;
     }
 
     if (t.isBinaryExpression(expression)) {
@@ -440,6 +748,7 @@ function evaluateExpression(
                     case '-=': finalValue = (current as number) - (value as number); break;
                     case '*=': finalValue = (current as number) * (value as number); break;
                     case '/=': finalValue = (current as number) / (value as number); break;
+
                 }
             }
             setVariable(state.scope, expression.left.name, finalValue);
@@ -472,7 +781,9 @@ function evaluateExpression(
             const value = obj[prop as string];
             // Handle console.log as special case
             if (typeof value === 'function') {
-                return value.bind(obj);
+                const bound = value.bind(obj);
+                // Also copy properties if needed? Not for now.
+                return bound;
             }
             return value;
         }
@@ -484,83 +795,98 @@ function evaluateExpression(
     }
 
     if (t.isNewExpression(expression)) {
-        if (!t.isIdentifier(expression.callee)) {
-            throw new Error('Only identifier-based class instantiation is supported');
-        }
+        let constructor: unknown;
+        let isUserClass = false;
+        let className = '';
 
-        const className = expression.callee.name;
-        const classDecl = state.classes.get(className);
-
-        if (!classDecl) {
-            throw new Error(`Class ${className} not found`);
+        if (t.isIdentifier(expression.callee)) {
+            className = expression.callee.name;
+            if (state.classes.has(className)) {
+                isUserClass = true;
+            } else {
+                constructor = lookupVariable(state.scope, className);
+            }
+        } else {
+            constructor = evaluateExpression(expression.callee, state, code);
         }
 
         const args = expression.arguments.map(arg => {
-            if (t.isExpression(arg)) {
-                return evaluateExpression(arg, state, code);
+            if (isExpressionOrLiteral(arg)) {
+                return evaluateExpression(arg as t.Expression, state, code);
             }
             return undefined;
         });
 
-        // Create instance
-        const instance: Record<string, unknown> = {
-            __className: className
-        };
+        if (isUserClass) {
+            const classDecl = state.classes.get(className);
+            if (!classDecl) throw new Error(`Class ${className} not found`);
 
-        // Find constructor
-        let constructor: t.ClassMethod | undefined;
-        classDecl.body.body.forEach(member => {
-            if (t.isClassMethod(member) && t.isIdentifier(member.key) && member.key.name === 'constructor') {
-                constructor = member;
-            }
-        });
+            // Create instance
+            const instance: Record<string, unknown> = {
+                __className: className
+            };
 
-        if (constructor) {
-            if (state.callStack.length >= MAX_CALL_DEPTH) {
-                throw new Error('Maximum call stack depth exceeded.');
-            }
-
-            const funcScope = createScope(state.scope);
-
-            // Bind 'this'
-            declareVariable(funcScope, 'this', instance);
-
-            // Bind params
-            constructor.params.forEach((param, i) => {
-                if (t.isIdentifier(param)) {
-                    declareVariable(funcScope, param.name, args[i]);
+            // Find constructor
+            let ctorMethod: t.ClassMethod | undefined;
+            classDecl.body.body.forEach(member => {
+                if (t.isClassMethod(member) && t.isIdentifier(member.key) && member.key.name === 'constructor') {
+                    ctorMethod = member;
                 }
             });
 
-            const frame: CallFrame = {
-                id: `frame_${state.callStack.length}`,
-                functionName: `${className}.constructor`,
-                lineNumber: expression.loc?.start.line || 0,
-                variables: new Map(),
-            };
-            funcScope.variables.forEach((value, name) => {
-                frame.variables.set(name, { name, value, type: getVariableType(value) });
-            });
-            state.callStack.push(frame);
+            if (ctorMethod) {
+                if (state.callStack.length >= MAX_CALL_DEPTH) {
+                    throw new Error('Maximum call stack depth exceeded.');
+                }
 
-            const previousScope = state.scope;
-            state.scope = funcScope;
+                const funcScope = createScope(state.scope);
 
-            // Execute constructor body
-            if (constructor.body) {
-                for (const stmt of constructor.body.body) {
-                    const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        break;
+                // Bind 'this'
+                declareVariable(funcScope, 'this', instance);
+
+                // Bind params
+                ctorMethod.params.forEach((param, i) => {
+                    if (t.isIdentifier(param)) {
+                        declareVariable(funcScope, param.name, args[i]);
+                    }
+                });
+
+                const frame: CallFrame = {
+                    id: `frame_${state.callStack.length}`,
+                    functionName: `${className}.constructor`,
+                    lineNumber: expression.loc?.start.line || 0,
+                    variables: new Map(),
+                };
+                funcScope.variables.forEach((value, name) => {
+                    frame.variables.set(name, { name, value, type: getVariableType(value) });
+                });
+                state.callStack.push(frame);
+
+                const previousScope = state.scope;
+                state.scope = funcScope;
+
+                // Execute constructor body
+                if (ctorMethod.body) {
+                    for (const stmt of ctorMethod.body.body) {
+                        const result = evaluateStatement(stmt, state, code);
+                        if (result && typeof result === 'object' && 'isReturn' in result) {
+                            break;
+                        }
                     }
                 }
+
+                state.scope = previousScope;
+                state.callStack.pop();
             }
 
-            state.scope = previousScope;
-            state.callStack.pop();
+            return instance;
         }
 
-        return instance;
+        if (typeof constructor === 'function') {
+            return new (constructor as any)(...args);
+        }
+
+        throw new Error('Expression is not a constructor');
     }
 
     if (t.isCallExpression(expression)) {
@@ -569,6 +895,11 @@ function evaluateExpression(
         // Handle method call (obj.method())
         if (t.isMemberExpression(calleeNode)) {
             const obj = evaluateExpression(calleeNode.object, state, code) as Record<string, unknown>;
+
+            // Check for Python Runtime Ops mapping
+            // Note: AST transform for Python maps a + b -> __pythonRuntime.ops.add(a, b)
+            // This is a MemberExpression call: __pythonRuntime.ops...
+
             const prop = t.isIdentifier(calleeNode.property)
                 ? calleeNode.property.name
                 : evaluateExpression(calleeNode.property as t.Expression, state, code) as string;
@@ -588,8 +919,8 @@ function evaluateExpression(
 
                     if (method) {
                         const args = expression.arguments.map(arg => {
-                            if (t.isExpression(arg)) {
-                                return evaluateExpression(arg, state, code);
+                            if (isExpressionOrLiteral(arg)) {
+                                return evaluateExpression(arg as t.Expression, state, code);
                             }
                             return undefined;
                         });
@@ -641,6 +972,18 @@ function evaluateExpression(
                     }
                 }
             }
+
+            // If it's a native function (like from pythonRuntime), execute it
+            // We retrieved 'property' above, but we need the function itself
+            if (obj && typeof obj[prop] === 'function') {
+                const args = expression.arguments.map(arg => {
+                    if (isExpressionOrLiteral(arg)) {
+                        return evaluateExpression(arg as t.Expression, state, code);
+                    }
+                    return undefined;
+                });
+                return (obj[prop] as Function).call(obj, ...args);
+            }
         }
 
         let callee: unknown;
@@ -648,8 +991,8 @@ function evaluateExpression(
             callee = evaluateExpression(calleeNode, state, code);
         }
         const args = expression.arguments.map(arg => {
-            if (t.isExpression(arg)) {
-                return evaluateExpression(arg, state, code);
+            if (isExpressionOrLiteral(arg)) {
+                return evaluateExpression(arg as t.Expression, state, code);
             }
             return undefined;
         });

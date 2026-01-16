@@ -27,12 +27,12 @@ interface FlowComponent {
     y: number;
     width: number;
     height: number;
+    title: string;
 }
 
 // Simple BFS-based layout that assigns rows and spreads nodes horizontally
 function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
     if (nodes.length === 0) return [];
-
 
 
     // Build outgoing edges map (excluding loop-back and recursive)
@@ -337,6 +337,7 @@ function removeMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes: FlowNo
     };
 }
 
+
 // Improved layout algorithm with component separation
 function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): FlowComponent[] {
     if (inputNodes.length === 0) return [];
@@ -351,7 +352,15 @@ function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): Flo
         // We include call edges here if we want them in the same component?
         // Usually, separate functions should be separate components.
         // So we IGNORE call edges for connectivity.
-        if (e.type !== 'call') {
+        // Also ignore recursive edges to avoid grouping recursive functions with themselves if logic is weird
+        // AND importantly, ignore edges that point TO a function node, as that's likely a call or metadata connection
+        // We want function definitions to be ISOLATED roots.
+
+        // Find the target node type
+        const targetNode = nodes.find(n => n.id === e.target);
+        const isTargetFunction = targetNode?.type === 'function';
+
+        if (e.type !== 'call' && e.type !== 'recursive' && !isTargetFunction) {
             neighbors.get(e.source)?.push(e.target);
             neighbors.get(e.target)?.push(e.source);
         }
@@ -412,6 +421,23 @@ function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): Flo
         const width = maxX - minX;
         const height = maxY - minY;
 
+        // Determine Title
+        let title = 'Sub-process';
+        const startNode = componentNodes.find(n => n.type === 'start');
+        if (startNode) {
+            title = 'Main Execution';
+        } else {
+            // Find root-ish node (0 in-degree roughly, or 'function' type)
+            const funcNode = componentNodes.find(n => n.type === 'function');
+            if (funcNode) {
+                // Formatting "function foo()" -> "Function: foo"
+                let name = funcNode.label.replace('function ', '').replace('()', '');
+                // Handle "class.method"
+                if (name.includes('.')) title = `Method: ${name}`;
+                else title = `Function: ${name}`;
+            }
+        }
+
         // Center the component internally
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
@@ -433,7 +459,8 @@ function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): Flo
             x: compX,
             y: compY,
             width,
-            height
+            height,
+            title
         });
 
         currentOffsetX += width + padding;
@@ -746,6 +773,13 @@ export function FlowChart() {
                         const pos = positions[comp.id] || { x: comp.x, y: comp.y };
                         const isSelected = selectedComponentId === comp.id;
 
+                        // Calculate bounding box for dashed border
+                        const padding = 40;
+                        const boxWidth = comp.width + padding * 2;
+                        const boxHeight = comp.height + padding * 2;
+                        const boxX = -boxWidth / 2;
+                        const boxY = -boxHeight / 2;
+
                         return (
                             <g
                                 key={comp.id}
@@ -758,18 +792,45 @@ export function FlowChart() {
                                     setSelectedComponentId(comp.id);
                                 }}
                             >
-                                {/* Selection Highlight Box */}
+                                {/* Component Container Label */}
+                                <text
+                                    x={boxX}
+                                    y={boxY - 15}
+                                    fill="#94a3b8"
+                                    fontSize="14"
+                                    fontWeight="600"
+                                    fontFamily="monospace"
+                                    letterSpacing="1px"
+                                >
+                                    {comp.title.toUpperCase()}
+                                </text>
+
+                                {/* Component Container Box */}
+                                <rect
+                                    x={boxX}
+                                    y={boxY}
+                                    width={boxWidth}
+                                    height={boxHeight}
+                                    fill="none"
+                                    stroke="#334155"
+                                    strokeWidth="1"
+                                    strokeDasharray="4,4"
+                                    rx="16"
+                                    pointerEvents="all" // Allow clicking on empty space to drag
+                                    opacity="0.5"
+                                />
+
+                                {/* Selection Highlight Box (Overlays the container) */}
                                 {isSelected && (
                                     <rect
-                                        x={-comp.width / 2 - 20}
-                                        y={-comp.height / 2 - 20}
-                                        width={comp.width + 40}
-                                        height={comp.height + 40}
+                                        x={boxX - 5}
+                                        y={boxY - 5}
+                                        width={boxWidth + 10}
+                                        height={boxHeight + 10}
                                         fill="none"
                                         stroke="#3b82f6"
                                         strokeWidth="2"
-                                        strokeDasharray="5,5"
-                                        rx="10"
+                                        rx="20"
                                         pointerEvents="none"
                                     />
                                 )}

@@ -40,8 +40,6 @@ export function Header() {
                     <button
                         className={`language-btn ${language === 'python' ? 'language-btn--active' : ''}`}
                         onClick={() => setLanguage('python')}
-                        disabled
-                        title="Coming soon!"
                     >
                         <span className="language-icon">🐍</span>
                         <span>Python</span>
