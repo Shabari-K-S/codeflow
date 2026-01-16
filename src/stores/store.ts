@@ -88,7 +88,7 @@ export const useStore = create<CodeFlowState>((set, get) => ({
         const { code, language } = get();
         try {
             const ast = parseCode(code, language);
-            const flowGraph = generateFlowGraph(ast, code);
+            const flowGraph = generateFlowGraph(ast, code, language);
             set({ flowGraph, parseError: null });
         } catch (error) {
             set({
