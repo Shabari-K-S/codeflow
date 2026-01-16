@@ -29,7 +29,7 @@ def fibonacci(n):
     return fibonacci(n - 1) + fibonacci(n - 2)
 
 result = fibonacci(5)
-print(f"Result: {result}")
+print("Result:", result)
 `;
 
 export const useStore = create<CodeFlowState>((set, get) => ({

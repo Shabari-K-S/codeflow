@@ -352,7 +352,15 @@ function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): Flo
         // We include call edges here if we want them in the same component?
         // Usually, separate functions should be separate components.
         // So we IGNORE call edges for connectivity.
-        if (e.type !== 'call') {
+        // Also ignore recursive edges to avoid grouping recursive functions with themselves if logic is weird
+        // AND importantly, ignore edges that point TO a function node, as that's likely a call or metadata connection
+        // We want function definitions to be ISOLATED roots.
+
+        // Find the target node type
+        const targetNode = nodes.find(n => n.id === e.target);
+        const isTargetFunction = targetNode?.type === 'function';
+
+        if (e.type !== 'call' && e.type !== 'recursive' && !isTargetFunction) {
             neighbors.get(e.source)?.push(e.target);
             neighbors.get(e.target)?.push(e.source);
         }

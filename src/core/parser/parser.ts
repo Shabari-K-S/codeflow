@@ -1,6 +1,6 @@
 import * as parser from '@babel/parser';
 import * as t from '@babel/types';
-import { parsePythonCode } from './pythonParser';
+import { parsePythonCode } from './pythonParser.ts';
 import type { FlowNode, FlowEdge, FlowGraph, FlowNodeType } from '../../types';
 
 let nodeIdCounter = 0;
@@ -452,13 +452,19 @@ function isInternalPythonNode(statement: t.Statement): boolean {
     return false;
 }
 
+interface LoopContext {
+    continueTargetId: string; // The ID to jump to for 'continue' (loop start/update)
+    breakTargetId: string;    // The ID to jump to for 'break' (loop exit)
+}
+
 function processStatement(
     statement: t.Statement,
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode | null {
     if (t.isEmptyStatement(statement)) return null;
 
@@ -468,12 +474,48 @@ function processStatement(
     }
 
     if (t.isSwitchStatement(statement)) {
-        return processSwitchStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
+        return processSwitchStatement(statement, code, nodes, edges, functionMap, variableTypeMap, loopContext);
+    }
+
+    if (t.isBlockStatement(statement)) {
+        let prevId: string | null = null;
+        let firstNode: FlowNode | null = null;
+
+        statement.body.forEach((stmt) => {
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
+            if (stmtNode) {
+                if (!firstNode) firstNode = stmtNode;
+
+                if (prevId && canContinue(prevId, nodes)) {
+                    edges.push({
+                        id: `edge_${prevId}_${stmtNode.id}`,
+                        source: prevId,
+                        target: stmtNode.id,
+                        type: 'normal'
+                    });
+                }
+                prevId = getLastNodeId(stmtNode, nodes, edges);
+            }
+        });
+
+        // Return the first node to link FROM the previous external node
+        // But what about the LAST node? The caller expects a single node returned to link TO the next external node.
+        // processStatement returns specific node types. 
+        // If we return the first node, the caller links to it.
+        // But the caller updates 'previousNodeId' using getLastNodeId(returnValue).
+        // So we need getLastNodeId to traverse down the block? 
+        // Yes, getLastNodeId implementations usually walk edges.
+        return firstNode;
     }
 
     // Handle For Loops specially (they have init/update nodes that need custom flow)
     if (t.isForStatement(statement)) {
         return processForStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
+    }
+
+    // Handle Python For loops (ForInStatement)
+    if (t.isForInStatement(statement)) {
+        return processForInStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
     }
 
     // Treat break as a process node for now, will link logic later
@@ -487,6 +529,39 @@ function processStatement(
             endLineNumber: statement.loc?.end.line || 0,
         };
         nodes.push(node);
+
+        if (loopContext) {
+            edges.push({
+                id: `edge_${node.id}_break_${loopContext.breakTargetId}`,
+                source: node.id,
+                target: loopContext.breakTargetId,
+                type: 'normal', // or specific style if we want
+                label: ''
+            });
+        }
+        return node;
+    }
+
+    if (t.isContinueStatement(statement)) {
+        const node: FlowNode = {
+            id: generateNodeId(),
+            type: 'process',
+            label: 'continue',
+            code: 'continue;',
+            lineNumber: statement.loc?.start.line || 0,
+            endLineNumber: statement.loc?.end.line || 0,
+        };
+        nodes.push(node);
+
+        if (loopContext) {
+            edges.push({
+                id: `edge_${node.id}_continue_${loopContext.continueTargetId}`,
+                source: node.id,
+                target: loopContext.continueTargetId,
+                type: 'loop-back', // Should look like a loop back
+                label: 'repeat'
+            });
+        }
         return node;
     }
 
@@ -495,7 +570,7 @@ function processStatement(
     }
 
     if (t.isTryStatement(statement)) {
-        return processTryStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
+        return processTryStatement(statement, code, nodes, edges, functionMap, variableTypeMap, loopContext);
     }
 
     const node: FlowNode = {
@@ -539,20 +614,13 @@ function processStatement(
 
     // Handle if statements
     if (t.isIfStatement(statement)) {
-        return processIfStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap);
+        return processIfStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap, loopContext);
     }
 
     // Handle loops
     if (t.isWhileStatement(statement)) {
         return processWhileStatement(statement, node, code, nodes, edges, functionMap, variableTypeMap);
     }
-
-    // Handle Python For loops (ForInStatement)
-    if (t.isForInStatement(statement)) {
-        return processForInStatement(statement, code, nodes, edges, functionMap, variableTypeMap);
-    }
-
-    // Moved DoWhile and Try processing up
 
     return node;
 }
@@ -625,38 +693,39 @@ function branchTerminates(node: t.Statement): boolean {
 
 function processIfStatement(
     statement: t.IfStatement,
-    decisionNode: FlowNode,
+    parentNode: FlowNode,
     code: string,
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode {
     // Check if both branches terminate (return/throw) - if so, no merge needed
     const consequentTerminates = branchTerminates(statement.consequent);
     const alternateTerminates = statement.alternate ? branchTerminates(statement.alternate) : false;
-    const bothTerminate = consequentTerminates && alternateTerminates;
+    // If both terminate, we don't strictly need a merge node, but for visual consistency we often keep it 
+    // unless we want dead ends. For now, let's keep logic simple: create merge if needed.
+    // Actually, if both terminate, the merge node is unreachable.
+    const needsMerge = !(consequentTerminates && alternateTerminates);
 
-    // Create merge node only if at least one branch doesn't terminate
-    let mergeNode: FlowNode | null = null;
-    if (!bothTerminate) {
-        mergeNode = {
-            id: generateNodeId(),
-            type: 'process',
-            label: 'merge',
-            code: '',
-            lineNumber: statement.loc?.end.line || 0,
-        };
-        nodes.push(mergeNode);
-    }
+    const mergeNode: FlowNode | null = needsMerge ? {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'merge',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    } : null;
+
+    if (mergeNode) nodes.push(mergeNode);
 
     // Process consequent (true branch)
     if (t.isBlockStatement(statement.consequent)) {
-        let prevId = decisionNode.id;
+        let prevId = parentNode.id;
         let firstInBranch = true;
 
         statement.consequent.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
             if (stmtNode) {
                 if (canContinue(prevId, nodes)) {
                     edges.push({
@@ -664,7 +733,7 @@ function processIfStatement(
                         source: prevId,
                         target: stmtNode.id,
                         type: firstInBranch ? 'true' : 'normal',
-                        label: firstInBranch ? 'true' : undefined,
+                        label: firstInBranch ? 'true' : undefined
                     });
                 }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
@@ -672,6 +741,7 @@ function processIfStatement(
             }
         });
 
+        // Loop back / Merge
         if (mergeNode && canContinue(prevId, nodes)) {
             edges.push({
                 id: `edge_${prevId}_${mergeNode.id}`,
@@ -681,17 +751,17 @@ function processIfStatement(
             });
         }
     } else {
-        const stmtNode = processStatement(statement.consequent, code, nodes, edges, functionMap, variableTypeMap);
-        if (stmtNode) {
+        const consequent = processStatement(statement.consequent, code, nodes, edges, functionMap, variableTypeMap, loopContext);
+        if (consequent) {
             edges.push({
-                id: `edge_${decisionNode.id}_${stmtNode.id}`,
-                source: decisionNode.id,
-                target: stmtNode.id,
+                id: `edge_${parentNode.id}_${consequent.id}`,
+                source: parentNode.id,
+                target: consequent.id,
                 type: 'true',
                 label: 'true',
             });
 
-            const lastId = getLastNodeId(stmtNode, nodes, edges);
+            const lastId = getLastNodeId(consequent, nodes, edges);
             if (mergeNode && canContinue(lastId, nodes)) {
                 edges.push({
                     id: `edge_${lastId}_${mergeNode.id}`,
@@ -706,22 +776,20 @@ function processIfStatement(
     // Process alternate (false branch)
     if (statement.alternate) {
         if (t.isBlockStatement(statement.alternate)) {
-            let prevId = decisionNode.id;
+            let prevId = parentNode.id;
             let firstInBranch = true;
 
             statement.alternate.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
                 if (stmtNode) {
                     if (canContinue(prevId, nodes)) {
-                        if (canContinue(prevId, nodes)) {
-                            edges.push({
-                                id: `edge_${prevId}_${stmtNode.id}`,
-                                source: prevId,
-                                target: stmtNode.id,
-                                type: firstInBranch ? 'false' : 'normal',
-                                label: firstInBranch ? 'false' : undefined,
-                            });
-                        }
+                        edges.push({
+                            id: `edge_${prevId}_${stmtNode.id}`,
+                            source: prevId,
+                            target: stmtNode.id,
+                            type: firstInBranch ? 'false' : 'normal',
+                            label: firstInBranch ? 'false' : undefined
+                        });
                     }
                     prevId = getLastNodeId(stmtNode, nodes, edges);
                     firstInBranch = false;
@@ -736,47 +804,21 @@ function processIfStatement(
                     type: 'normal',
                 });
             }
-        } else if (t.isIfStatement(statement.alternate)) {
-            // else if
-            const elseIfNode = processStatement(statement.alternate, code, nodes, edges, functionMap, variableTypeMap);
-            if (elseIfNode) {
-                edges.push({
-                    id: `edge_${decisionNode.id}_${elseIfNode.id}`,
-                    source: decisionNode.id,
-                    target: elseIfNode.id,
-                    type: 'false',
-                    label: 'false',
-                });
-
-                // Nested If terminates where it terminates. We don't connect elseIfNode directly to merge.
-                // But wait, elseIfNode returns a decisionNode which HAS a merge node.
-                // We need to connect that merge node to OUR merge node?
-                // Nested if structure:
-                // If1 -> ElseIf -> (True/False) -> MergeIf2.
-                // MergeIf2 -> MergeIf1.
-                // getLastNodeId(elseIfNode) returns MergeIf2.
-                const lastId = getLastNodeId(elseIfNode, nodes, edges);
-                if (mergeNode && canContinue(lastId, nodes)) {
-                    edges.push({
-                        id: `edge_${lastId}_${mergeNode.id}`,
-                        source: lastId,
-                        target: mergeNode.id,
-                        type: 'normal',
-                    });
-                }
-            }
         } else {
-            const stmtNode = processStatement(statement.alternate, code, nodes, edges, functionMap, variableTypeMap);
-            if (stmtNode) {
+            // Single Statement or Else If
+            const alternate = processStatement(statement.alternate, code, nodes, edges, functionMap, variableTypeMap, loopContext);
+            if (alternate) {
+                // If the alternate is an IfStatement (else if), processStatement(If) returns the If node.
+                // We connect Parent -> Alternate with 'false'.
                 edges.push({
-                    id: `edge_${decisionNode.id}_${stmtNode.id}`,
-                    source: decisionNode.id,
-                    target: stmtNode.id,
+                    id: `edge_${parentNode.id}_${alternate.id}`,
+                    source: parentNode.id,
+                    target: alternate.id,
                     type: 'false',
                     label: 'false',
                 });
 
-                const lastId = getLastNodeId(stmtNode, nodes, edges);
+                const lastId = getLastNodeId(alternate, nodes, edges);
                 if (mergeNode && canContinue(lastId, nodes)) {
                     edges.push({
                         id: `edge_${lastId}_${mergeNode.id}`,
@@ -791,8 +833,8 @@ function processIfStatement(
         // No else branch - connect directly to merge if it exists
         if (mergeNode) {
             edges.push({
-                id: `edge_${decisionNode.id}_${mergeNode.id}_false`,
-                source: decisionNode.id,
+                id: `edge_${parentNode.id}_${mergeNode.id}_false`,
+                source: parentNode.id,
                 target: mergeNode.id,
                 type: 'false',
                 label: 'false',
@@ -801,9 +843,9 @@ function processIfStatement(
     }
 
     if (mergeNode) {
-        decisionNode.children = [mergeNode.id];
+        parentNode.children = [mergeNode.id];
     }
-    return decisionNode;
+    return parentNode;
 }
 
 function processForStatement(
@@ -812,7 +854,8 @@ function processForStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext // Not inherited, For creates a NEW context
 ): FlowNode {
     // 1. Definition/Init Node (Optional)
     let initNode: FlowNode | null = null;
@@ -880,21 +923,36 @@ function processForStatement(
         // If no update, body connects back to loop directly (handled below)
     }
 
-    // 5. Process Body
+    // 4. Process Body
+    // Create NEW LoopContext
+    const currentLoopContext: LoopContext = {
+        continueTargetId: updateNode ? updateNode.id : loopNode.id, // Continue goes to update or back to loop
+        breakTargetId: exitNode.id // Break goes to exit
+    };
+
     if (t.isBlockStatement(statement.body)) {
         let prevId = loopNode.id;
         let firstInBody = true;
 
-        statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+        statement.body.body.forEach((stmt) => {
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
             if (stmtNode) {
-                if (canContinue(prevId, nodes)) {
+                // If it's the first statement, link from loopNode (true branch)
+                if (firstInBody) {
+                    edges.push({
+                        id: `edge_${loopNode.id}_${stmtNode.id}_true`,
+                        source: loopNode.id,
+                        target: stmtNode.id,
+                        type: 'true',
+                        label: 'true'
+                    });
+                } else if (canContinue(prevId, nodes)) {
+                    // Otherwise link from previous statement
                     edges.push({
                         id: `edge_${prevId}_${stmtNode.id}`,
                         source: prevId,
                         target: stmtNode.id,
-                        type: firstInBody ? 'true' : 'normal',
-                        label: firstInBody ? 'body' : undefined,
+                        type: 'normal'
                     });
                 }
                 prevId = getLastNodeId(stmtNode, nodes, edges);
@@ -904,55 +962,36 @@ function processForStatement(
 
         // Loop back logic
         if (canContinue(prevId, nodes)) {
-            if (updateNode) {
-                // Connect Body End -> Update
-                edges.push({
-                    id: `edge_${prevId}_${updateNode.id}`,
-                    source: prevId,
-                    target: updateNode.id,
-                    type: 'normal',
-                });
-            } else {
-                // Connect Body End -> Loop Condition
-                edges.push({
-                    id: `edge_${prevId}_${loopNode.id}_back`,
-                    source: prevId,
-                    target: loopNode.id,
-                    type: 'loop-back',
-                    label: 'repeat',
-                });
-            }
+            edges.push({
+                id: `edge_${prevId}_${updateNode ? updateNode.id : loopNode.id}_loop`,
+                source: prevId,
+                target: updateNode ? updateNode.id : loopNode.id,
+                type: 'loop-back',
+            });
         }
+
     } else {
         // Single statement body
-        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap);
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
         if (stmtNode) {
+            // Loop -> Body
             edges.push({
-                id: `edge_${loopNode.id}_${stmtNode.id}`,
+                id: `edge_${loopNode.id}_${stmtNode.id}_true`,
                 source: loopNode.id,
                 target: stmtNode.id,
                 type: 'true',
-                label: 'body',
+                label: 'true'
             });
-            const lastId = getLastNodeId(stmtNode, nodes, edges);
 
+            // Body -> Update/Loop
+            const lastId = getLastNodeId(stmtNode, nodes, edges);
             if (canContinue(lastId, nodes)) {
-                if (updateNode) {
-                    edges.push({
-                        id: `edge_${lastId}_${updateNode.id}`,
-                        source: lastId,
-                        target: updateNode.id,
-                        type: 'normal',
-                    });
-                } else {
-                    edges.push({
-                        id: `edge_${lastId}_${loopNode.id}_back`,
-                        source: lastId,
-                        target: loopNode.id,
-                        type: 'loop-back',
-                        label: 'repeat',
-                    });
-                }
+                edges.push({
+                    id: `edge_${lastId}_${updateNode ? updateNode.id : loopNode.id}_loop`,
+                    source: lastId,
+                    target: updateNode ? updateNode.id : loopNode.id,
+                    type: 'loop-back',
+                });
             }
         }
     }
@@ -985,7 +1024,8 @@ function processWhileStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext // New context
 ): FlowNode {
     // Create exit node for after the loop
     const exitNode: FlowNode = {
@@ -997,13 +1037,19 @@ function processWhileStatement(
     };
     nodes.push(exitNode);
 
+    // Create NEW LoopContext for this loop
+    const currentLoopContext: LoopContext = {
+        continueTargetId: loopNode.id, // Continue goes back to the loop condition
+        breakTargetId: exitNode.id // Break goes to the exit node
+    };
+
     // Process loop body
     if (t.isBlockStatement(statement.body)) {
         let prevId = loopNode.id;
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
             if (stmtNode) {
                 edges.push({
                     id: `edge_${prevId}_${stmtNode.id}`,
@@ -1027,6 +1073,28 @@ function processWhileStatement(
                 label: 'repeat',
             });
         }
+    } else {
+        // Single statement body
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
+        if (stmtNode) {
+            edges.push({
+                id: `edge_${loopNode.id}_${stmtNode.id}`,
+                source: loopNode.id,
+                target: stmtNode.id,
+                type: 'true',
+                label: 'body',
+            });
+            const lastId = getLastNodeId(stmtNode, nodes, edges);
+            if (canContinue(lastId, nodes)) {
+                edges.push({
+                    id: `edge_${lastId}_${loopNode.id}_back`,
+                    source: lastId,
+                    target: loopNode.id,
+                    type: 'loop-back',
+                    label: 'repeat',
+                });
+            }
+        }
     }
 
     // Exit condition edge
@@ -1048,7 +1116,8 @@ function processDoWhileStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode {
     // 1. Create Do Node (Entry/Merge point)
     const doNode: FlowNode = {
@@ -1082,13 +1151,19 @@ function processDoWhileStatement(
     };
     nodes.push(exitNode);
 
+    // Create NEW LoopContext for this loop
+    const currentLoopContext: LoopContext = {
+        continueTargetId: conditionNode.id, // Continue goes to the condition check
+        breakTargetId: exitNode.id // Break goes to the exit node
+    };
+
     // 4. Process Body
     if (t.isBlockStatement(statement.body)) {
         let prevId = doNode.id;
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
             if (stmtNode) {
                 if (canContinue(prevId, nodes)) {
                     edges.push({
@@ -1115,7 +1190,7 @@ function processDoWhileStatement(
         }
     } else {
         // Single statement body
-        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap);
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
         if (stmtNode) {
             edges.push({
                 id: `edge_${doNode.id}_${stmtNode.id}`,
@@ -1164,7 +1239,8 @@ function processTryStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode {
     // 1. Try Node
     const tryNode: FlowNode = {
@@ -1198,7 +1274,7 @@ function processTryStatement(
         let firstInBody = true;
 
         statement.block.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
             if (stmtNode) {
                 if (canContinue(prevId, nodes)) {
                     edges.push({
@@ -1247,7 +1323,7 @@ function processTryStatement(
             // let firstInBody = true; // Not strictly needed if catchNode is the start
 
             catchClause.body.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
                 if (stmtNode) {
                     if (canContinue(prevId, nodes)) {
                         edges.push({
@@ -1283,7 +1359,7 @@ function processTryStatement(
         let prevId = finallyNode.id;
         if (t.isBlockStatement(finallyBlock)) {
             finallyBlock.body.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
                 if (stmtNode) {
                     if (canContinue(prevId, nodes)) {
                         edges.push({
@@ -1346,7 +1422,8 @@ function processSwitchStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode {
     // 1. Create Switch Node
     const switchNode: FlowNode = {
@@ -1403,7 +1480,7 @@ function processSwitchStatement(
 
         if (caseClause.consequent.length > 0) {
             caseClause.consequent.forEach(stmt => {
-                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+                const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, loopContext);
                 if (stmtNode) {
                     // Match found -> Enter body
                     if (canContinue(bodyPrevId, nodes)) {
@@ -1497,7 +1574,8 @@ function processForInStatement(
     nodes: FlowNode[],
     edges: FlowEdge[],
     functionMap: Map<string, FlowNode>,
-    variableTypeMap: Map<string, string>
+    variableTypeMap: Map<string, string>,
+    loopContext?: LoopContext
 ): FlowNode {
     // 1. Loop Node
     const loopNode: FlowNode = {
@@ -1531,12 +1609,19 @@ function processForInStatement(
     nodes.push(exitNode);
 
     // 3. Process Body
+
+    // Create NEW LoopContext for this loop
+    const currentLoopContext: LoopContext = {
+        continueTargetId: loopNode.id, // Continue goes to back to loop
+        breakTargetId: exitNode.id // Break goes to exit
+    };
+
     if (t.isBlockStatement(statement.body)) {
         let prevId = loopNode.id;
         let firstInBody = true;
 
         statement.body.body.forEach(stmt => {
-            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap);
+            const stmtNode = processStatement(stmt, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
             if (stmtNode) {
                 if (canContinue(prevId, nodes)) {
                     edges.push({
@@ -1563,7 +1648,7 @@ function processForInStatement(
             });
         }
     } else {
-        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap);
+        const stmtNode = processStatement(statement.body, code, nodes, edges, functionMap, variableTypeMap, currentLoopContext);
         if (stmtNode) {
             edges.push({
                 id: `edge_${loopNode.id}_${stmtNode.id}`,
