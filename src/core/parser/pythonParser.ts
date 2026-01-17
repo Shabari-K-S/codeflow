@@ -96,7 +96,7 @@ function preprocessPythonCode(code: string): string {
 
     // After comma cleanup, apply f-string regex
     // Note: F-string regex assumes valid python.
-    return out.replace(/f(["'])(.*?)\1/g, (match, quote, content) => {
+    return out.replace(/f(["'])(.*?)\1/g, (_match, quote, content) => {
         const extractions: string[] = [];
         let processedContent = content.replace(/\{([^}]+)\}/g, (_: string, expr: string) => {
             extractions.push(expr.trim());
