@@ -7,7 +7,6 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Vite](https://img.shields.io/badge/Vite-7.0-646CFF?logo=vite&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## 📖 Overview
 
