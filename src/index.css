@@ -152,7 +152,9 @@ body {
   background-color: var(--color-bg-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow: hidden;
+  /* overflow: hidden; Removed to allow scrolling if needed, or handle in Layout */
+  /* overflow: hidden; */
+  margin: 0;
 }
 
 /* === Scrollbar Styles === */

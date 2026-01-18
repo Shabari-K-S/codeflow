@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useStore } from '../stores/store';
 import { PlaybackControls } from './Controls/PlaybackControls';
@@ -5,6 +6,7 @@ import './Header.css';
 
 export function Header() {
     const { language, setLanguage, visualize, execute, flowGraph, trace } = useStore();
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
     const handleVisualize = () => {
         visualize();
@@ -29,21 +31,48 @@ export function Header() {
 
             <div className="header__actions">
                 {/* Language Selector */}
+                {/* Language Selector */}
                 <div className="language-selector">
                     <button
-                        className={`language-btn ${language === 'javascript' ? 'language-btn--active' : ''}`}
-                        onClick={() => setLanguage('javascript')}
+                        className="language-dropdown-trigger"
+                        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                        onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
                     >
-                        <span className="language-icon">🟨</span>
-                        <span>JavaScript</span>
+                        <span className="language-icon">
+                            {language === 'javascript' ? '🟨' : '🐍'}
+                        </span>
+                        <span className="language-name">
+                            {language === 'javascript' ? 'JavaScript' : 'Python'}
+                        </span>
+                        <span className={`dropdown-arrow ${isDropdownOpen ? 'open' : ''}`}>
+                            ▼
+                        </span>
                     </button>
-                    <button
-                        className={`language-btn ${language === 'python' ? 'language-btn--active' : ''}`}
-                        onClick={() => setLanguage('python')}
-                    >
-                        <span className="language-icon">🐍</span>
-                        <span>Python</span>
-                    </button>
+
+                    {isDropdownOpen && (
+                        <div className="language-dropdown-menu">
+                            <button
+                                className={`language-option ${language === 'javascript' ? 'active' : ''}`}
+                                onClick={() => {
+                                    setLanguage('javascript');
+                                    setIsDropdownOpen(false);
+                                }}
+                            >
+                                <span className="language-icon">🟨</span>
+                                <span>JavaScript</span>
+                            </button>
+                            <button
+                                className={`language-option ${language === 'python' ? 'active' : ''}`}
+                                onClick={() => {
+                                    setLanguage('python');
+                                    setIsDropdownOpen(false);
+                                }}
+                            >
+                                <span className="language-icon">🐍</span>
+                                <span>Python</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* Action Buttons */}

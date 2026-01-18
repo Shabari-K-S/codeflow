@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Header } from './Header';
 import { CodeEditor } from './Editor/CodeEditor';
 import { FlowChart } from './FlowChart/FlowChart';
+import { PlaybackControls } from './Controls/PlaybackControls';
 import { VariableInspector } from './VariablePanel/VariableInspector';
 import { SplitPane } from './SplitPane/SplitPane';
 import { useWindowSize } from '../hooks/useWindowSize';
@@ -27,6 +28,12 @@ export function Layout() {
                         <VariableInspector />
                     </div>
                 </main>
+
+                {/* Mobile Bottom Timeline */}
+                <div className="mobile-timeline-container">
+                    <PlaybackControls />
+                </div>
+
                 <nav className="mobile-nav">
                     <button
                         className={`mobile-nav-btn ${activeTab === 'editor' ? 'active' : ''}`}

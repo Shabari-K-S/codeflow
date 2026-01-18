@@ -201,7 +201,8 @@
 
     .header__brand {
         width: 100%;
-        justify-content: center;
+        justify-content: flex-start;
+        /* Left align title */
         border-bottom: 1px solid var(--color-border-primary);
         padding-bottom: var(--space-2);
         margin-bottom: var(--space-1);
@@ -245,5 +246,110 @@
         position: absolute;
         top: var(--space-2);
         right: var(--space-3);
+        /* Adjust top to align with the brand row content */
+        /* Assuming brand row height is driven by content + padding */
+        /* If header padding-top is space-2, and we want it entered */
+        /* Let's try to center it explicitly relative to the brand text */
+        top: calc(var(--space-2) + 0.5rem);
     }
+
+    /* Hide playback controls in header on mobile */
+    /* Hide playback controls in header on mobile */
+    .header .playback-controls {
+        display: none !important;
+    }
+}
+
+/* Language Selector - Dropdown Style */
+.language-selector {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: 2px;
+}
+
+.language-dropdown-trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    min-width: 140px;
+    /* Ensure consistent width */
+    justify-content: space-between;
+}
+
+.language-dropdown-trigger:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-elevated);
+}
+
+.language-name {
+    flex: 1;
+    text-align: left;
+}
+
+.dropdown-arrow {
+    font-size: 0.7em;
+    transition: transform 0.2s ease;
+    opacity: 0.7;
+}
+
+.dropdown-arrow.open {
+    transform: rotate(180deg);
+}
+
+.language-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    /* left: 0;  Optionally align left if preferred */
+    background-color: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-1);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 100;
+    min-width: 100%;
+    overflow: hidden;
+}
+
+.language-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: left;
+    width: 100%;
+}
+
+.language-option:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-tertiary);
+}
+
+.language-option.active {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-active);
+    /* Or a specific active color */
+    font-weight: var(--font-weight-semibold);
 }
