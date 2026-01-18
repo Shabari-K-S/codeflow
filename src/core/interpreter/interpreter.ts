@@ -826,6 +826,52 @@ function evaluateExpression(
         return lookupVariable(state.scope, 'this');
     }
 
+    if (t.isArrowFunctionExpression(expression) || t.isFunctionExpression(expression)) {
+        return (...args: unknown[]) => {
+            const funcScope = createScope(state.scope);
+
+            expression.params.forEach((param, i) => {
+                if (t.isIdentifier(param)) {
+                    declareVariable(funcScope, param.name, args[i]);
+                }
+            });
+
+            const frame: CallFrame = {
+                id: `frame_${state.callStack.length}`,
+                functionName: '(anonymous)',
+                lineNumber: expression.loc?.start.line || 0,
+                variables: new Map(),
+            };
+            // Initial variables
+            funcScope.variables.forEach((val, name) => {
+                frame.variables.set(name, { name, value: val, type: getVariableType(val) });
+            });
+            state.callStack.push(frame);
+
+            const previousScope = state.scope;
+            state.scope = funcScope;
+
+            let returnValue: unknown = undefined;
+
+            if (t.isBlockStatement(expression.body)) {
+                for (const stmt of expression.body.body) {
+                    const res = evaluateStatement(stmt, state, code);
+                    if (res && typeof res === 'object' && 'isReturn' in res) {
+                        returnValue = (res as { isReturn: boolean; value: unknown }).value;
+                        break;
+                    }
+                }
+            } else {
+                returnValue = evaluateExpression(expression.body as t.Expression, state, code);
+            }
+
+            state.scope = previousScope;
+            state.callStack.pop();
+
+            return returnValue;
+        };
+    }
+
     if (t.isNewExpression(expression)) {
         let constructor: unknown;
         let isUserClass = false;
