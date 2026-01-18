@@ -140,7 +140,6 @@
 html,
 body,
 #root {
-  height: 100%;
   width: 100%;
 }
 
@@ -152,8 +151,9 @@ body {
   background-color: var(--color-bg-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* overflow: hidden; Removed to allow scrolling if needed, or handle in Layout */
-  /* overflow: hidden; */
+  overflow-x: hidden;
+  overflow-y: hidden;
+  /* Prevent horizontal scroll globally */
   margin: 0;
 }
 

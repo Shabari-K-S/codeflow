@@ -1,13 +1,12 @@
 .landing-page {
-    height: 100vh;
-    width: 100vw;
+    width: 100%;
     background-color: var(--color-bg-primary);
     display: flex;
     flex-direction: column;
     align-items: center;
     position: relative;
-    overflow-x: hidden;
-    overflow-y: auto;
+    /* overflow-x: hidden; Handled by body */
+    min-height: 100vh;
     scroll-behavior: smooth;
 }
 
@@ -22,6 +21,7 @@
     /* Increased from 60vh to push features below fold */
     margin-bottom: var(--space-16);
     /* Extra buffer */
+    overflow-y: hidden;
 }
 
 .hero-icon {
@@ -330,10 +330,6 @@
 
 @media (max-width: 768px) {
     .landing-page {
-        height: auto;
-        min-height: 100vh;
-        overflow-y: visible;
-        /* Use native window scroll on mobile */
         flex-direction: column;
         justify-content: flex-start;
         padding-top: var(--space-8);
@@ -354,7 +350,7 @@
     }
 
     .footer-brand {
-        font-size: 22vw;
+        font-size: 20vw;
         letter-spacing: -2px;
         margin: var(--space-4) 0;
     }
