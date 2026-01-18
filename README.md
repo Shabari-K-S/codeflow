@@ -18,8 +18,9 @@ Whether you are debugging complex logic, teaching algorithms, or simply explorin
 ## ✨ Key Features
 
 ### 🔍 Deep Execution Visualization
-- **Line-by-Line Tracing**: Watch the instruction pointer move through your code in real-time.
+- **Line-by-Line & Expression Tracing**: Watch the instruction pointer move through your code in real-time, with granular step tracking for expressions and template literals.
 - **Variable Inspector**: Monitor the state of local and global variables, arrays, and objects as they mutate.
+- **Sandboxed Environment**: Safe execution with support for standard JavaScript built-ins like `Array`, `Math`, `Object`, `Date`, and more.
 - **Call Stack Tracking**: Visualize the stack frames pushing and popping during function calls and recursion.
 - **Execution Timeline**: Scrub back and forth through the execution history to pinpoint logic errors.
 
@@ -104,10 +105,6 @@ Contributions are welcome! If you'd like to improve the parser, add new language
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
 4. Push to the branch (`git push origin feature/AmazingFeature`).
 5. Open a Pull Request.
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
