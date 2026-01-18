@@ -77,14 +77,6 @@ export function LandingPage() {
                 <div className="footer-content">
                     <h2 className="footer-brand">CodeFlow</h2>
                     <div className="footer-bottom">
-                        <div className="footer-links">
-                            <span className="footer-link-group">
-                                <a href="#">About CodeFlow</a>
-                                <a href="#">Features</a>
-                                <a href="#">Privacy</a>
-                                <a href="#">Terms</a>
-                            </span>
-                        </div>
                         <div className="footer-signature">
                             Created by <a href="https://github.com/Shabari-K-S" target="_blank" rel="noopener noreferrer">Shabari K S</a>
                         </div>

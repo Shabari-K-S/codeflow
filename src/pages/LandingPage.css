@@ -332,6 +332,8 @@
     .landing-page {
         height: auto;
         min-height: 100vh;
+        overflow-y: visible;
+        /* Use native window scroll on mobile */
         flex-direction: column;
         justify-content: flex-start;
         padding-top: var(--space-8);
