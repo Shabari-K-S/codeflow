@@ -266,6 +266,18 @@ export function executeCode(
         },
     };
     declareVariable(state.scope, 'console', consoleObj);
+    declareVariable(state.scope, 'Array', Array);
+    declareVariable(state.scope, 'Object', Object);
+    declareVariable(state.scope, 'Math', Math);
+    declareVariable(state.scope, 'Number', Number);
+    declareVariable(state.scope, 'String', String);
+    declareVariable(state.scope, 'Boolean', Boolean);
+    declareVariable(state.scope, 'Date', Date);
+    declareVariable(state.scope, 'parseInt', parseInt);
+    declareVariable(state.scope, 'parseFloat', parseFloat);
+    declareVariable(state.scope, 'isNaN', isNaN);
+    declareVariable(state.scope, 'isFinite', isFinite);
+    declareVariable(state.scope, 'JSON', JSON);
 
     // Python Runtime Support
     if (language === 'python') {
@@ -636,6 +648,21 @@ function evaluateExpression(
         return expression.value;
     }
 
+    if (t.isTemplateLiteral(expression)) {
+        let result = '';
+        expression.quasis.forEach((element, i) => {
+            result += element.value.cooked || element.value.raw;
+            if (i < expression.expressions.length) {
+                const expr = expression.expressions[i];
+                if (t.isExpression(expr) || t.isLiteral(expr)) { // Expressions are TSType | Expression in Babel, narrowing needed
+                    const val = evaluateExpression(expr as t.Expression, state, code);
+                    result += String(val);
+                }
+            }
+        });
+        return result;
+    }
+
     if (t.isBooleanLiteral(expression)) {
         return expression.value;
     }
@@ -757,9 +784,14 @@ function evaluateExpression(
 
         if (t.isMemberExpression(expression.left)) {
             const obj = evaluateExpression(expression.left.object, state, code) as Record<string, unknown>;
-            const prop = t.isIdentifier(expression.left.property)
-                ? expression.left.property.name
-                : evaluateExpression(expression.left.property as t.Expression, state, code);
+            let prop;
+            if (expression.left.computed) {
+                prop = evaluateExpression(expression.left.property as t.Expression, state, code);
+            } else {
+                prop = t.isIdentifier(expression.left.property)
+                    ? expression.left.property.name
+                    : evaluateExpression(expression.left.property as t.Expression, state, code);
+            }
             if (obj && typeof obj === 'object') {
                 obj[prop as string] = value;
             }
@@ -900,9 +932,11 @@ function evaluateExpression(
             // Note: AST transform for Python maps a + b -> __pythonRuntime.ops.add(a, b)
             // This is a MemberExpression call: __pythonRuntime.ops...
 
-            const prop = t.isIdentifier(calleeNode.property)
-                ? calleeNode.property.name
-                : evaluateExpression(calleeNode.property as t.Expression, state, code) as string;
+            const prop = calleeNode.computed
+                ? evaluateExpression(calleeNode.property as t.Expression, state, code) as string
+                : t.isIdentifier(calleeNode.property)
+                    ? calleeNode.property.name
+                    : evaluateExpression(calleeNode.property as t.Expression, state, code) as string;
 
             if (obj && obj.__className) {
                 const className = obj.__className as string;
@@ -1047,6 +1081,9 @@ function evaluateExpression(
             // Save current scope and switch to function scope
             const previousScope = state.scope;
             state.scope = funcScope;
+
+            // Visual Step: Highlight the function declaration line (Entry)
+            addStep(state, funcDecl);
 
             // Execute function body
             let returnValue: unknown = undefined;

@@ -989,7 +989,7 @@ function processForStatement(
                 id: `edge_${prevId}_${updateNode ? updateNode.id : loopNode.id}_loop`,
                 source: prevId,
                 target: updateNode ? updateNode.id : loopNode.id,
-                type: 'loop-back',
+                type: updateNode ? 'normal' : 'loop-back',
             });
         }
 
@@ -1013,7 +1013,7 @@ function processForStatement(
                     id: `edge_${lastId}_${updateNode ? updateNode.id : loopNode.id}_loop`,
                     source: lastId,
                     target: updateNode ? updateNode.id : loopNode.id,
-                    type: 'loop-back',
+                    type: updateNode ? 'normal' : 'loop-back',
                 });
             }
         }
