@@ -1,13 +1,11 @@
 .landing-page {
     width: 100%;
+    min-height: 100vh;
     background-color: var(--color-bg-primary);
     display: flex;
     flex-direction: column;
     align-items: center;
     position: relative;
-    /* overflow-x: hidden; Handled by body */
-    min-height: 100vh;
-    scroll-behavior: smooth;
 }
 
 .landing-content {
@@ -21,7 +19,6 @@
     /* Increased from 60vh to push features below fold */
     margin-bottom: var(--space-16);
     /* Extra buffer */
-    overflow-y: hidden;
 }
 
 .hero-icon {
@@ -95,6 +92,8 @@
     bottom: 0;
     z-index: 0;
     pointer-events: none;
+    overflow: hidden;
+    /* Contain wide gradient spheres */
 }
 
 .gradient-sphere {
@@ -330,9 +329,7 @@
 
 @media (max-width: 768px) {
     .landing-page {
-        flex-direction: column;
-        justify-content: flex-start;
-        padding-top: var(--space-8);
+        padding-top: var(--space-4);
     }
 
     .hero-title {
