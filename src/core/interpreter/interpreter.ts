@@ -129,6 +129,65 @@ function getVariableType(value: unknown): string {
     return typeof value;
 }
 
+function cloneValue(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value !== 'object') return value;
+
+    if (seen.has(value as object)) return seen.get(value as object);
+
+    if (value instanceof PythonList) {
+        // Unwrap PythonList to native array for visualization snapshot
+        return cloneValue(value.items, seen);
+    }
+
+    if (Array.isArray(value)) {
+        const arr: unknown[] = [];
+        seen.set(value, arr);
+        value.forEach(v => arr.push(cloneValue(v, seen)));
+        return arr;
+    }
+
+    const obj: Record<string, unknown> = {};
+    seen.set(value as object, obj);
+
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            obj[key] = cloneValue((value as Record<string, unknown>)[key], seen);
+        }
+    }
+    return obj;
+}
+
+const BUILTIN_VARIABLES = new Set([
+    'console',
+    'Array',
+    'Object',
+    'Math',
+    'Number',
+    'String',
+    'Boolean',
+    'Date',
+    'parseInt',
+    'parseFloat',
+    'isNaN',
+    'isFinite',
+    'JSON',
+    // Python built-ins
+    'print',
+    'range',
+    'len',
+    'str',
+    'int',
+    'float',
+    'abs',
+    'min',
+    'max',
+    'type',
+    'bool',
+    'sum',
+    '__pythonRuntime'
+]);
+
 function collectVariables(scope: Scope): VariableValue[] {
     const variables: VariableValue[] = [];
     let currentScope: Scope | null = scope;
@@ -138,15 +197,17 @@ function collectVariables(scope: Scope): VariableValue[] {
         currentScope.variables.forEach((value, name) => {
             // Filter out internal Python runtime variables and private vars
             if (!seen.has(name) && !name.startsWith('__')) {
+                if (BUILTIN_VARIABLES.has(name)) return;
+
                 seen.add(name);
-                let displayValue = value;
-                if (value instanceof PythonList) {
-                    displayValue = value.items;
-                }
+
+                // Create a deep snapshot of the value to prevent future mutations 
+                // from affecting historical steps
+                const snapshotValue = cloneValue(value);
 
                 variables.push({
                     name,
-                    value: displayValue,
+                    value: snapshotValue,
                     type: getVariableType(value),
                 });
             }
