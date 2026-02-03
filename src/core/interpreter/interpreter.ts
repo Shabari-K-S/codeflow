@@ -121,6 +121,56 @@ function declareVariable(scope: Scope, name: string, value: unknown): void {
     scope.variables.set(name, value);
 }
 
+// Helper function to bind function parameters with support for default values and rest params
+function bindParameters(
+    params: (t.Identifier | t.Pattern | t.RestElement)[],
+    args: unknown[],
+    scope: Scope,
+    state: InterpreterState,
+    code: string
+): void {
+    params.forEach((param, i) => {
+        if (t.isIdentifier(param)) {
+            // Regular parameter
+            declareVariable(scope, param.name, args[i]);
+        } else if (t.isAssignmentPattern(param) && t.isIdentifier(param.left)) {
+            // Default parameter: function foo(x = 10)
+            const value = args[i] !== undefined
+                ? args[i]
+                : evaluateExpression(param.right, state, code);
+            declareVariable(scope, param.left.name, value);
+        } else if (t.isRestElement(param) && t.isIdentifier(param.argument)) {
+            // Rest parameter: function foo(...args)
+            declareVariable(scope, param.argument.name, args.slice(i));
+        }
+    });
+}
+
+// Helper function to collect function arguments with support for spread
+function collectArguments(
+    argumentNodes: (t.Expression | t.SpreadElement | t.ArgumentPlaceholder)[],
+    state: InterpreterState,
+    code: string
+): unknown[] {
+    const args: unknown[] = [];
+    argumentNodes.forEach(arg => {
+        if (t.isSpreadElement(arg)) {
+            // Spread element: foo(...arr)
+            const spreadValue = evaluateExpression(arg.argument, state, code);
+            if (Array.isArray(spreadValue)) {
+                args.push(...spreadValue);
+            } else if (spreadValue instanceof PythonList) {
+                args.push(...spreadValue.items);
+            }
+        } else if (isExpressionOrLiteral(arg)) {
+            args.push(evaluateExpression(arg as t.Expression, state, code));
+        } else {
+            args.push(undefined);
+        }
+    });
+    return args;
+}
+
 function getVariableType(value: unknown): string {
     if (value === null) return 'null';
     if (value === undefined) return 'undefined';
@@ -245,7 +295,6 @@ function addStep(state: InterpreterState, node: t.Node): void {
 }
 
 function isExpressionOrLiteral(node: t.Node | null | undefined): boolean {
-    if (!node) return false;
     if (!node) return false;
     return t.isExpression(node) || t.isLiteral(node) || (node as any).type === 'Literal';
 }
@@ -525,8 +574,10 @@ function evaluateStatement(
             if (t.isBlockStatement(statement.consequent)) {
                 for (const stmt of statement.consequent.body) {
                     const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        return result;
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result || 'isBreak' in result || 'isContinue' in result) {
+                            return result;
+                        }
                     }
                 }
             } else {
@@ -536,8 +587,10 @@ function evaluateStatement(
             if (t.isBlockStatement(statement.alternate)) {
                 for (const stmt of statement.alternate.body) {
                     const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        return result;
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result || 'isBreak' in result || 'isContinue' in result) {
+                            return result;
+                        }
                     }
                 }
             } else {
@@ -558,7 +611,7 @@ function evaluateStatement(
         }
 
         let iterations = 0;
-        while (true) {
+        outerFor: while (true) {
             if (iterations++ > MAX_ITERATIONS) {
                 throw new Error('Maximum loop iterations exceeded. Possible infinite loop.');
             }
@@ -567,19 +620,25 @@ function evaluateStatement(
             if (statement.test) {
                 addStep(state, statement);
                 const condition = evaluateExpression(statement.test, state, code);
-                if (Boolean(statement.test) && !condition) break;
+                if (!condition) break;
             }
 
             // Execute body
             if (t.isBlockStatement(statement.body)) {
                 for (const stmt of statement.body.body) {
                     const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        return result;
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result) return result;
+                        if ('isBreak' in result) break outerFor;
+                        if ('isContinue' in result) break; // break inner loop, continue outer
                     }
                 }
             } else {
-                evaluateStatement(statement.body, state, code);
+                const result = evaluateStatement(statement.body, state, code);
+                if (result && typeof result === 'object') {
+                    if ('isReturn' in result) return result;
+                    if ('isBreak' in result) break;
+                }
             }
 
             // Update
@@ -592,7 +651,7 @@ function evaluateStatement(
 
     if (t.isWhileStatement(statement)) {
         let iterations = 0;
-        while (true) {
+        outerWhile: while (true) {
             if (iterations++ > MAX_ITERATIONS) {
                 throw new Error('Maximum loop iterations exceeded. Possible infinite loop.');
             }
@@ -604,12 +663,18 @@ function evaluateStatement(
             if (t.isBlockStatement(statement.body)) {
                 for (const stmt of statement.body.body) {
                     const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        return result;
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result) return result;
+                        if ('isBreak' in result) break outerWhile;
+                        if ('isContinue' in result) break; // break inner loop, continue outer
                     }
                 }
             } else {
-                evaluateStatement(statement.body, state, code);
+                const result = evaluateStatement(statement.body, state, code);
+                if (result && typeof result === 'object') {
+                    if ('isReturn' in result) return result;
+                    if ('isBreak' in result) break;
+                }
             }
         }
         return undefined;
@@ -620,6 +685,135 @@ function evaluateStatement(
             ? evaluateExpression(statement.argument, state, code)
             : undefined;
         return { isReturn: true, value };
+    }
+
+    if (t.isBreakStatement(statement)) {
+        return { isBreak: true };
+    }
+
+    if (t.isContinueStatement(statement)) {
+        return { isContinue: true };
+    }
+
+    if (t.isThrowStatement(statement)) {
+        const errorValue = evaluateExpression(statement.argument, state, code);
+        const error = errorValue instanceof Error ? errorValue : new Error(String(errorValue));
+        throw error;
+    }
+
+    if (t.isTryStatement(statement)) {
+        try {
+            // Execute try block
+            if (t.isBlockStatement(statement.block)) {
+                for (const stmt of statement.block.body) {
+                    addStep(state, stmt);
+                    const result = evaluateStatement(stmt, state, code);
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result || 'isBreak' in result || 'isContinue' in result) {
+                            return result;
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            // Execute catch block if present
+            if (statement.handler && t.isBlockStatement(statement.handler.body)) {
+                const catchScope = createScope(state.scope);
+
+                // Bind the error to the catch parameter
+                if (statement.handler.param && t.isIdentifier(statement.handler.param)) {
+                    declareVariable(catchScope, statement.handler.param.name, error);
+                }
+
+                const previousScope = state.scope;
+                state.scope = catchScope;
+
+                try {
+                    for (const stmt of statement.handler.body.body) {
+                        addStep(state, stmt);
+                        const result = evaluateStatement(stmt, state, code);
+                        if (result && typeof result === 'object') {
+                            if ('isReturn' in result || 'isBreak' in result || 'isContinue' in result) {
+                                state.scope = previousScope;
+                                return result;
+                            }
+                        }
+                    }
+                } finally {
+                    state.scope = previousScope;
+                }
+            }
+        } finally {
+            // Execute finally block if present
+            if (statement.finalizer && t.isBlockStatement(statement.finalizer)) {
+                for (const stmt of statement.finalizer.body) {
+                    addStep(state, stmt);
+                    evaluateStatement(stmt, state, code);
+                }
+            }
+        }
+        return undefined;
+    }
+
+    if (t.isSwitchStatement(statement)) {
+        const discriminant = evaluateExpression(statement.discriminant, state, code);
+        let matched = false;
+        let shouldBreak = false;
+
+        for (const caseClause of statement.cases) {
+            // Check if this case matches (or is default)
+            const isDefault = caseClause.test === null;
+            const caseValue = caseClause.test
+                ? evaluateExpression(caseClause.test, state, code)
+                : undefined;
+
+            if (matched || isDefault || discriminant === caseValue) {
+                matched = true;
+                for (const stmt of caseClause.consequent) {
+                    if (t.isBreakStatement(stmt)) {
+                        shouldBreak = true;
+                        break;
+                    }
+                    addStep(state, stmt);
+                    const result = evaluateStatement(stmt, state, code);
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result) return result;
+                        if ('isBreak' in result) { shouldBreak = true; break; }
+                    }
+                }
+                if (shouldBreak) break;
+            }
+        }
+        return undefined;
+    }
+
+    if (t.isDoWhileStatement(statement)) {
+        let iterations = 0;
+        outerDoWhile: do {
+            if (iterations++ > MAX_ITERATIONS) {
+                throw new Error('Maximum loop iterations exceeded. Possible infinite loop.');
+            }
+
+            addStep(state, statement);
+
+            if (t.isBlockStatement(statement.body)) {
+                for (const stmt of statement.body.body) {
+                    const result = evaluateStatement(stmt, state, code);
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result) return result;
+                        if ('isBreak' in result) break outerDoWhile;
+                        if ('isContinue' in result) break; // break inner, continue outer
+                    }
+                }
+            } else {
+                const result = evaluateStatement(statement.body, state, code);
+                if (result && typeof result === 'object') {
+                    if ('isReturn' in result) return result;
+                    if ('isBreak' in result) break;
+                }
+            }
+        } while (evaluateExpression(statement.test, state, code));
+        return undefined;
     }
 
     if (t.isClassDeclaration(statement)) {
@@ -633,8 +827,10 @@ function evaluateStatement(
     if (t.isBlockStatement(statement)) {
         for (const stmt of statement.body) {
             const result = evaluateStatement(stmt, state, code);
-            if (result && typeof result === 'object' && 'isReturn' in result) {
-                return result;
+            if (result && typeof result === 'object') {
+                if ('isReturn' in result || 'isBreak' in result || 'isContinue' in result) {
+                    return result;
+                }
             }
         }
         return undefined;
@@ -652,7 +848,7 @@ function evaluateStatement(
 
         let iterations = 0;
         // Iterate
-        for (const value of (right as Iterable<unknown>)) {
+        outerForOf: for (const value of (right as Iterable<unknown>)) {
             if (iterations++ > MAX_ITERATIONS) {
                 throw new Error('Maximum loop iterations exceeded. Possible infinite loop.');
             }
@@ -678,12 +874,18 @@ function evaluateStatement(
             if (t.isBlockStatement(statement.body)) {
                 for (const stmt of statement.body.body) {
                     const result = evaluateStatement(stmt, state, code);
-                    if (result && typeof result === 'object' && 'isReturn' in result) {
-                        return result;
+                    if (result && typeof result === 'object') {
+                        if ('isReturn' in result) return result;
+                        if ('isBreak' in result) break outerForOf;
+                        if ('isContinue' in result) break; // break inner, continue outer
                     }
                 }
             } else {
-                evaluateStatement(statement.body, state, code);
+                const result = evaluateStatement(statement.body, state, code);
+                if (result && typeof result === 'object') {
+                    if ('isReturn' in result) return result;
+                    if ('isBreak' in result) break;
+                }
             }
         }
         return undefined;
@@ -797,6 +999,16 @@ function evaluateExpression(
             case '===': return left === right;
             case '!=': return left != right;
             case '!==': return left !== right;
+            // Bitwise operators
+            case '|': return (left as number) | (right as number);
+            case '&': return (left as number) & (right as number);
+            case '^': return (left as number) ^ (right as number);
+            case '<<': return (left as number) << (right as number);
+            case '>>': return (left as number) >> (right as number);
+            case '>>>': return (left as number) >>> (right as number);
+            // Type checking operators
+            case 'instanceof': return left instanceof (right as any);
+            case 'in': return (left as string) in (right as object);
             default:
                 return undefined;
         }
@@ -836,7 +1048,15 @@ function evaluateExpression(
                     case '-=': finalValue = (current as number) - (value as number); break;
                     case '*=': finalValue = (current as number) * (value as number); break;
                     case '/=': finalValue = (current as number) / (value as number); break;
-
+                    case '%=': finalValue = (current as number) % (value as number); break;
+                    case '**=': finalValue = Math.pow(current as number, value as number); break;
+                    // Bitwise compound assignment
+                    case '&=': finalValue = (current as number) & (value as number); break;
+                    case '|=': finalValue = (current as number) | (value as number); break;
+                    case '^=': finalValue = (current as number) ^ (value as number); break;
+                    case '<<=': finalValue = (current as number) << (value as number); break;
+                    case '>>=': finalValue = (current as number) >> (value as number); break;
+                    case '>>>=': finalValue = (current as number) >>> (value as number); break;
                 }
             }
             setVariable(state.scope, expression.left.name, finalValue);
@@ -891,11 +1111,8 @@ function evaluateExpression(
         return (...args: unknown[]) => {
             const funcScope = createScope(state.scope);
 
-            expression.params.forEach((param, i) => {
-                if (t.isIdentifier(param)) {
-                    declareVariable(funcScope, param.name, args[i]);
-                }
-            });
+            // Bind parameters using helper (supports default values and rest params)
+            bindParameters(expression.params, args, funcScope, state, code);
 
             const frame: CallFrame = {
                 id: `frame_${state.callStack.length}`,
@@ -983,12 +1200,8 @@ function evaluateExpression(
                 // Bind 'this'
                 declareVariable(funcScope, 'this', instance);
 
-                // Bind params
-                ctorMethod.params.forEach((param, i) => {
-                    if (t.isIdentifier(param)) {
-                        declareVariable(funcScope, param.name, args[i]);
-                    }
-                });
+                // Bind params using helper (supports default values and rest params)
+                bindParameters(ctorMethod.params, args, funcScope, state, code);
 
                 const frame: CallFrame = {
                     id: `frame_${state.callStack.length}`,
@@ -1059,12 +1272,8 @@ function evaluateExpression(
                     });
 
                     if (method) {
-                        const args = expression.arguments.map(arg => {
-                            if (isExpressionOrLiteral(arg)) {
-                                return evaluateExpression(arg as t.Expression, state, code);
-                            }
-                            return undefined;
-                        });
+                        // Use collectArguments helper (supports spread)
+                        const args = collectArguments(expression.arguments, state, code);
 
                         if (state.callStack.length >= MAX_CALL_DEPTH) {
                             throw new Error('Maximum call stack depth exceeded.');
@@ -1075,12 +1284,8 @@ function evaluateExpression(
                         // Bind 'this'
                         declareVariable(funcScope, 'this', obj);
 
-                        // Bind params
-                        method.params.forEach((param, i) => {
-                            if (t.isIdentifier(param)) {
-                                declareVariable(funcScope, param.name, args[i]);
-                            }
-                        });
+                        // Bind params using helper (supports default values and rest params)
+                        bindParameters(method.params, args, funcScope, state, code);
 
                         const frame: CallFrame = {
                             id: `frame_${state.callStack.length}`,
@@ -1131,12 +1336,7 @@ function evaluateExpression(
         if (t.isExpression(calleeNode)) {
             callee = evaluateExpression(calleeNode, state, code);
         }
-        const args = expression.arguments.map(arg => {
-            if (isExpressionOrLiteral(arg)) {
-                return evaluateExpression(arg as t.Expression, state, code);
-            }
-            return undefined;
-        });
+        const args = collectArguments(expression.arguments, state, code);
 
         if (typeof callee === 'function') {
             return callee(...args);
@@ -1161,12 +1361,8 @@ function evaluateExpression(
             // Create new scope for function
             const funcScope = createScope(state.scope);
 
-            // Bind parameters
-            funcDecl.params.forEach((param, i) => {
-                if (t.isIdentifier(param)) {
-                    declareVariable(funcScope, param.name, args[i]);
-                }
-            });
+            // Bind parameters using helper (supports default values and rest params)
+            bindParameters(funcDecl.params, args, funcScope, state, code);
 
             // Push call frame
             const frame: CallFrame = {

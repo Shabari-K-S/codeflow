@@ -1279,19 +1279,7 @@ function processTryStatement(
     };
     nodes.push(tryNode);
 
-    // 2. Determine merge point (After Try/Catch)
-    // If Finally exists, it's the merge point for Try/Catch, and it exits to an AfterFinally node.
-
-    const afterNode: FlowNode = {
-        id: generateNodeId(),
-        type: 'process',
-        label: 'end try',
-        code: '',
-        lineNumber: statement.loc?.end.line || 0,
-    };
-    nodes.push(afterNode);
-
-    // 3. Process Try Block
+    // 2. Process Try Block
     // Connection: TryNode -> Block Start
     let tryEndId: string | null = null;
 
@@ -1320,7 +1308,7 @@ function processTryStatement(
         tryEndId = prevId;
     }
 
-    // 4. Process Catch Clause
+    // 3. Process Catch Clause
     let catchEndId: string | null = null;
 
     if (statement.handler) {
@@ -1366,7 +1354,7 @@ function processTryStatement(
         }
     }
 
-    // 5. Process Finally Block
+    // 4. Process Finally Block
     let finallyStartId: string | null = null;
     let finallyEndId: string | null = null;
 
@@ -1401,6 +1389,16 @@ function processTryStatement(
         }
         finallyEndId = prevId;
     }
+
+    // 5. Create afterNode (end try) - AFTER all other nodes so it appears at the end
+    const afterNode: FlowNode = {
+        id: generateNodeId(),
+        type: 'process',
+        label: 'end try',
+        code: '',
+        lineNumber: statement.loc?.end.line || 0,
+    };
+    nodes.push(afterNode);
 
     // 6. Connect Ends
     const nextStepId = finallyStartId || afterNode.id;
