@@ -28,7 +28,7 @@ interface Scope {
 }
 
 // Helper classes for Python Runtime
-class PythonList {
+export class PythonList {
     items: any[];
 
     constructor(...args: any[]) {
@@ -70,12 +70,98 @@ class PythonList {
         return this.items.length;
     }
 
-    toString() {
-        return this.items.toString();
+    toString(): string {
+        return `[${this.items.map(item => {
+            if (typeof item === 'string') return `'${item}'`;
+            if (item === null) return 'None';
+            if (item === true) return 'True';
+            if (item === false) return 'False';
+            if (item && typeof item === 'object' && item.toString && (item instanceof PythonList || item instanceof PythonTuple || item instanceof PythonSet)) {
+                return item.toString();
+            }
+            if (Array.isArray(item)) return JSON.stringify(item);
+            return String(item);
+        }).join(', ')}]`;
+    }
+
+    pop(index: number = -1) {
+        if (this.items.length === 0) {
+            throw new Error('pop from empty list');
+        }
+        if (index < 0) {
+            index = this.items.length + index;
+        }
+        if (index < 0 || index >= this.items.length) {
+            throw new Error('pop index out of range');
+        }
+        return this.items.splice(index, 1)[0];
+    }
+
+    extend(iterable: any) {
+        if (Array.isArray(iterable)) {
+            this.items.push(...iterable);
+        } else if (iterable instanceof PythonList) {
+            this.items.push(...iterable.items);
+        } else {
+            throw new Error('TypeError: object is not iterable');
+        }
+    }
+
+    insert(index: number, item: any) {
+        if (index < 0) {
+            index = Math.max(0, this.items.length + index);
+        }
+        index = Math.min(index, this.items.length);
+        this.items.splice(index, 0, item);
+    }
+
+    remove(item: any) {
+        const index = this.items.findIndex(i => i === item); // Simple equality for now
+        if (index === -1) {
+            throw new Error('ValueError: list.remove(x): x not in list');
+        }
+        this.items.splice(index, 1);
+    }
+
+    clear() {
+        this.items = [];
+    }
+
+    index(item: any, start: number = 0, end: number = this.items.length) {
+        if (start < 0) start = Math.max(0, this.items.length + start);
+        if (end < 0) end = Math.max(0, this.items.length + end);
+
+        const idx = this.items.slice(start, end).findIndex(i => i === item);
+        if (idx === -1) {
+            throw new Error(`ValueError: ${item} is not in list`);
+        }
+        return start + idx;
+    }
+
+    count(item: any) {
+        return this.items.filter(i => i === item).length;
+    }
+
+    sort(key?: (a: any) => number, reverse: boolean = false) {
+        this.items.sort((a, b) => {
+            const valA = key ? key(a) : a;
+            const valB = key ? key(b) : b;
+            if (valA < valB) return reverse ? 1 : -1;
+            if (valA > valB) return reverse ? -1 : 1;
+            return 0;
+        });
+    }
+
+    reverse() {
+        this.items.reverse();
+    }
+
+    copy() {
+        return new PythonList([...this.items]);
     }
 }
 
-class PythonDict {
+export class PythonDict {
     [key: string]: any;
     constructor(...pairs: any[][]) {
         pairs.forEach(pair => {
@@ -84,6 +170,279 @@ class PythonDict {
             }
         });
     }
+
+    keys(): string[] {
+        return Object.keys(this).filter(k => typeof this[k] !== 'function');
+    }
+
+    values(): any[] {
+        return this.keys().map(k => this[k]);
+    }
+
+    items(): [string, any][] {
+        return this.keys().map(k => [k, this[k]] as [string, any]);
+    }
+
+    get(key: string, defaultValue: any = undefined): any {
+        return key in this ? this[key] : defaultValue;
+    }
+
+    update(other: Record<string, any>): void {
+        Object.assign(this, other);
+    }
+
+    pop(key: string, defaultValue?: any) {
+        if (Object.prototype.hasOwnProperty.call(this, key)) {
+            const val = this[key];
+            delete this[key];
+            return val;
+        }
+        if (defaultValue !== undefined) {
+            return defaultValue;
+        }
+        throw new Error(`KeyError: '${key}'`);
+    }
+
+    popitem() {
+        const keys = this.keys();
+        if (keys.length === 0) {
+            throw new Error('KeyError: popitem(): dictionary is empty');
+        }
+        const key = keys[keys.length - 1]; // LIFO
+        const value = this[key];
+        delete this[key];
+        return [key, value];
+    }
+
+    clear() {
+        this.keys().forEach(key => delete this[key]);
+    }
+
+    setdefault(key: string, defaultValue: any = null) {
+        if (Object.prototype.hasOwnProperty.call(this, key)) {
+            return this[key];
+        }
+        this[key] = defaultValue;
+        return defaultValue;
+    }
+
+    static fromkeys(iterable: any, value: any = null) {
+        const dict = new PythonDict();
+        let keys: any[] = [];
+        if (Array.isArray(iterable)) {
+            keys = iterable;
+        } else if (iterable instanceof PythonList) {
+            keys = iterable.items;
+        }
+
+        keys.forEach(k => {
+            dict[String(k)] = value;
+        });
+        return dict;
+    }
+}
+
+export class PythonSet {
+    items: Set<any>;
+
+    constructor(iterable: any = null) {
+        this.items = new Set();
+        if (iterable) {
+            if (Array.isArray(iterable)) {
+                iterable.forEach(i => this.items.add(i));
+            } else if (iterable instanceof PythonList) {
+                iterable.items.forEach(i => this.items.add(i));
+            } else if (iterable instanceof PythonSet) {
+                iterable.items.forEach(i => this.items.add(i));
+            } else if (iterable instanceof PythonTuple) {
+                iterable.items.forEach(i => this.items.add(i));
+            } else if (typeof iterable === 'string') {
+                for (const char of iterable) {
+                    this.items.add(char);
+                }
+            }
+        }
+    }
+
+    add(item: any) {
+        this.items.add(item);
+    }
+
+    remove(item: any) {
+        if (!this.items.has(item)) {
+            throw new Error(`KeyError: ${item}`);
+        }
+        this.items.delete(item);
+    }
+
+    discard(item: any) {
+        this.items.delete(item);
+    }
+
+    pop() {
+        if (this.items.size === 0) {
+            throw new Error('pop from an empty set');
+        }
+        const value = this.items.values().next().value;
+        this.items.delete(value);
+        return value;
+    }
+
+    clear() {
+        this.items.clear();
+    }
+
+    copy() {
+        // Create new set with same items
+        const newSet = new PythonSet();
+        this.items.forEach(i => newSet.add(i));
+        return newSet;
+    }
+
+    union(...others: (PythonSet | Set<any>)[]) {
+        const result = this.copy();
+        others.forEach(other => {
+            const items = other instanceof PythonSet ? other.items : other;
+            items.forEach(item => result.add(item));
+        });
+        return result;
+    }
+
+    intersection(...others: (PythonSet | Set<any>)[]) {
+        const result = new PythonSet();
+        this.items.forEach(item => {
+            if (others.every(other => {
+                const items = other instanceof PythonSet ? other.items : other;
+                return items.has(item);
+            })) {
+                result.add(item);
+            }
+        });
+        return result;
+    }
+
+    difference(...others: (PythonSet | Set<any>)[]) {
+        const result = this.copy();
+        others.forEach(other => {
+            const items = other instanceof PythonSet ? other.items : other;
+            items.forEach(item => result.discard(item));
+        });
+        return result;
+    }
+
+    symmetric_difference(other: PythonSet) {
+        const result = new PythonSet();
+        this.items.forEach(item => {
+            if (!other.items.has(item)) result.add(item);
+        });
+        other.items.forEach(item => {
+            if (!this.items.has(item)) result.add(item);
+        });
+        return result;
+    }
+
+    issubset(other: PythonSet) {
+        for (const item of this.items) {
+            if (!other.items.has(item)) return false;
+        }
+        return true;
+    }
+
+    issuperset(other: PythonSet) {
+        return other.issubset(this);
+    }
+
+    toJSON() {
+        // Serialize as array for JSON
+        return Array.from(this.items);
+    }
+
+    toString(): string {
+        if (this.items.size === 0) return 'set()';
+        return `{${Array.from(this.items).join(', ')}}`;
+    }
+
+    get length() {
+        return this.items.size;
+    }
+
+    [Symbol.iterator]() {
+        return this.items[Symbol.iterator]();
+    }
+}
+
+export class PythonTuple {
+    items: any[];
+
+    constructor(iterable: any = []) {
+        if (Array.isArray(iterable)) {
+            this.items = [...iterable];
+        } else if (iterable instanceof PythonList || iterable instanceof PythonTuple) {
+            this.items = [...iterable.items];
+        } else if (iterable instanceof PythonSet) {
+            this.items = Array.from(iterable.items);
+        } else if (typeof iterable === 'string') {
+            this.items = iterable.split('');
+        } else {
+            // Handle single argument as ...args pattern if called directly via new PythonTuple(1, 2)
+            // But signature says iterable. Standard python tuple([1,2]).
+            // If we support new PythonTuple(1, 2) like list, we need to check args.
+            // Let's stick to standard constructor taking one iterable.
+            // But wait, PythonList supports (...args). Let's support both for convenience here if needed.
+            // Actually, to keep it simple and consistent with standard Python: tuple([1,2]) -> (1, 2).
+            // If we want (1, 2), we usually construct literals.
+            // Let's assume the parser creates Tuples from literals by passing an array.
+            this.items = Array.isArray(iterable) ? iterable : [iterable];
+        }
+        // Fix for arguments: usage in codebase is new PythonTuple([elements])
+    }
+
+    index(item: any, start: number = 0, end: number = this.items.length) {
+        if (start < 0) start = Math.max(0, this.items.length + start);
+        if (end < 0) end = Math.max(0, this.items.length + end);
+
+        const idx = this.items.slice(start, end).findIndex(i => i === item);
+        if (idx === -1) {
+            throw new Error(`ValueError: ${item} is not in tuple`);
+        }
+        return start + idx;
+    }
+
+    count(item: any) {
+        return this.items.filter(i => i === item).length;
+    }
+
+    toJSON() {
+        return this.items;
+    }
+
+    toString(): string {
+        const elements: string[] = this.items.map(item => {
+            if (typeof item === 'string') return `'${item}'`;
+            if (item === null) return 'None';
+            if (item === true) return 'True';
+            if (item === false) return 'False';
+            if (item && typeof item === 'object' && item.toString && (item instanceof PythonList || item instanceof PythonTuple || item instanceof PythonSet)) {
+                return item.toString();
+            }
+            return String(item);
+        });
+
+        if (elements.length === 1) {
+            return `(${elements[0]},)`;
+        }
+        return `(${elements.join(', ')})`;
+    }
+
+    get length() {
+        return this.items.length;
+    }
+
+    [Symbol.iterator]() {
+        return this.items[Symbol.iterator]();
+    }
+
+    // Immutable: No set/add/remove methods
 }
 
 function createScope(parent: Scope | null = null): Scope {
@@ -123,25 +482,31 @@ function declareVariable(scope: Scope, name: string, value: unknown): void {
 
 // Helper function to bind function parameters with support for default values and rest params
 function bindParameters(
-    params: (t.Identifier | t.Pattern | t.RestElement)[],
+    params: (t.Identifier | t.Pattern | t.RestElement | t.TSParameterProperty)[],
     args: unknown[],
     scope: Scope,
     state: InterpreterState,
     code: string
 ): void {
     params.forEach((param, i) => {
-        if (t.isIdentifier(param)) {
+        // Handle TSParameterProperty (e.g. constructor(public x: number))
+        let actualParam = param;
+        if (t.isTSParameterProperty(param)) {
+            actualParam = param.parameter;
+        }
+
+        if (t.isIdentifier(actualParam)) {
             // Regular parameter
-            declareVariable(scope, param.name, args[i]);
-        } else if (t.isAssignmentPattern(param) && t.isIdentifier(param.left)) {
+            declareVariable(scope, actualParam.name, args[i]);
+        } else if (t.isAssignmentPattern(actualParam) && t.isIdentifier(actualParam.left)) {
             // Default parameter: function foo(x = 10)
             const value = args[i] !== undefined
                 ? args[i]
-                : evaluateExpression(param.right, state, code);
-            declareVariable(scope, param.left.name, value);
-        } else if (t.isRestElement(param) && t.isIdentifier(param.argument)) {
+                : evaluateExpression(actualParam.right, state, code);
+            declareVariable(scope, actualParam.left.name, value);
+        } else if (t.isRestElement(actualParam) && t.isIdentifier(actualParam.argument)) {
             // Rest parameter: function foo(...args)
-            declareVariable(scope, param.argument.name, args.slice(i));
+            declareVariable(scope, actualParam.argument.name, args.slice(i));
         }
     });
 }
@@ -176,6 +541,9 @@ function getVariableType(value: unknown): string {
     if (value === undefined) return 'undefined';
     if (Array.isArray(value)) return 'array';
     if (value instanceof PythonList) return 'list';
+    if (value instanceof PythonSet) return 'set';
+    if (value instanceof PythonTuple) return 'tuple';
+    if (value instanceof PythonDict) return 'dict';
     return typeof value;
 }
 
@@ -186,8 +554,19 @@ function cloneValue(value: unknown, seen = new WeakMap<object, unknown>()): unkn
     if (seen.has(value as object)) return seen.get(value as object);
 
     if (value instanceof PythonList) {
-        // Unwrap PythonList to native array for visualization snapshot
         return cloneValue(value.items, seen);
+    }
+
+    if (value instanceof PythonTuple) {
+        // Visualize tuple as array marked as tuple? Or just simple array for now.
+        // Current visualizer probably handles arrays generally. 
+        // Let's pass array but maybe we need type info in variable entry (which we have).
+        return cloneValue(value.items, seen);
+    }
+
+    if (value instanceof PythonSet) {
+        // Convert set to array for visualization
+        return cloneValue(Array.from(value.items), seen);
     }
 
     if (Array.isArray(value)) {
@@ -221,7 +600,12 @@ const BUILTIN_VARIABLES = new Set([
     'parseFloat',
     'isNaN',
     'isFinite',
+
     'JSON',
+    'Map',
+    'Set',
+    'WeakMap',
+    'WeakSet',
     // Python built-ins
     'print',
     'range',
@@ -388,6 +772,10 @@ export function executeCode(
     declareVariable(state.scope, 'isNaN', isNaN);
     declareVariable(state.scope, 'isFinite', isFinite);
     declareVariable(state.scope, 'JSON', JSON);
+    declareVariable(state.scope, 'Map', Map);
+    declareVariable(state.scope, 'Set', Set);
+    declareVariable(state.scope, 'WeakMap', WeakMap);
+    declareVariable(state.scope, 'WeakSet', WeakSet);
 
     // Python Runtime Support
     if (language === 'python') {
@@ -395,16 +783,36 @@ export function executeCode(
             objects: {
                 list: PythonList,
                 dict: PythonDict,
+                set: PythonSet,
+                tuple: PythonTuple,
             },
             ops: {
                 add: (a: any, b: any) => a + b,
-                subtract: (a: any, b: any) => a - b,
+                subtract: (a: any, b: any) => {
+                    if (a instanceof PythonSet && b instanceof PythonSet) {
+                        return a.difference(b);
+                    }
+                    return a - b;
+                },
                 multiply: (a: any, b: any) => a * b,
                 divide: (a: any, b: any) => a / b,
                 floorDivide: (a: any, b: any) => Math.floor(a / b),
                 mod: (a: any, b: any) => a % b,
                 pow: (a: any, b: any) => Math.pow(a, b),
-                eq: (a: any, b: any) => a == b,
+                eq: (a: any, b: any) => {
+                    // Deep equality for our structures?
+                    // For now simple equality or if both are lists/sets/tuples
+                    if (a instanceof PythonSet && b instanceof PythonSet) {
+                        if (a.length !== b.length) return false;
+                        return a.issubset(b);
+                    }
+                    // ... other type checks
+                    if (a instanceof PythonList && b instanceof PythonList) {
+                        // Quick compare strings (lazy)
+                        return a.toString() === b.toString();
+                    }
+                    return a == b;
+                },
                 ne: (a: any, b: any) => a != b,
                 lt: (a: any, b: any) => a < b,
                 lte: (a: any, b: any) => a <= b,
@@ -413,12 +821,16 @@ export function executeCode(
                 in: (a: any, b: any) => {
                     if (Array.isArray(b)) return b.includes(a);
                     if (b instanceof PythonList) return b.items.includes(a);
+                    if (b instanceof PythonTuple) return b.items.includes(a);
+                    if (b instanceof PythonSet) return b.items.has(a);
                     if (typeof b === 'object' && b !== null) return a in b; // Check keys
                     return false;
                 },
                 notIn: (a: any, b: any) => {
                     if (Array.isArray(b)) return !b.includes(a);
                     if (b instanceof PythonList) return !b.items.includes(a);
+                    if (b instanceof PythonTuple) return !b.items.includes(a);
+                    if (b instanceof PythonSet) return !b.items.has(a);
                     if (typeof b === 'object' && b !== null) return !(a in b);
                     return true;
                 },
@@ -440,8 +852,8 @@ export function executeCode(
                             return JSON.stringify(arg);
                         }
                         if (typeof arg === 'object' && arg !== null) {
-                            if (arg instanceof PythonList || (arg.constructor && arg.constructor.name === 'PythonDict')) {
-                                return JSON.stringify(arg);
+                            if (arg instanceof PythonList || arg instanceof PythonSet || arg instanceof PythonTuple || (arg.constructor && arg.constructor.name === 'PythonDict')) {
+                                return arg.toString();
                             }
                             // Plain object (dict)
                             return JSON.stringify(arg);
@@ -468,12 +880,16 @@ export function executeCode(
                 len: (obj: any) => {
                     if (Array.isArray(obj) || typeof obj === 'string') return obj.length;
                     if (obj instanceof PythonList) return obj.length;
+                    if (obj instanceof PythonTuple) return obj.length;
+                    if (obj instanceof PythonSet) return obj.length;
                     if (obj instanceof Set || obj instanceof Map) return obj.size;
                     if (typeof obj === 'object' && obj !== null) return Object.keys(obj).length;
                     return 0;
                 },
                 str: (obj: any) => {
-                    if (obj instanceof PythonList) return JSON.stringify(obj.items);
+                    if (obj instanceof PythonList) return obj.toString();
+                    if (obj instanceof PythonSet) return obj.toString();
+                    if (obj instanceof PythonTuple) return obj.toString();
                     if (typeof obj === 'object' && obj !== null) return JSON.stringify(obj);
                     return String(obj);
                 },
@@ -485,34 +901,141 @@ export function executeCode(
                 },
                 abs: (obj: any) => Math.abs(obj),
                 min: (...args: any[]) => {
-                    if (args.length === 1 && (Array.isArray(args[0]) || args[0] instanceof PythonList)) {
-                        const arr = args[0] instanceof PythonList ? args[0].items : args[0];
-                        return Math.min(...arr);
+                    if (args.length === 1) {
+                        const arg = args[0];
+                        if (Array.isArray(arg)) return Math.min(...arg);
+                        if (arg instanceof PythonList || arg instanceof PythonTuple) return Math.min(...arg.items);
+                        if (arg instanceof PythonSet) return Math.min(...Array.from(arg.items));
                     }
                     return Math.min(...args);
                 },
                 max: (...args: any[]) => {
-                    if (args.length === 1 && (Array.isArray(args[0]) || args[0] instanceof PythonList)) {
-                        const arr = args[0] instanceof PythonList ? args[0].items : args[0];
-                        return Math.max(...arr);
+                    if (args.length === 1) {
+                        const arg = args[0];
+                        if (Array.isArray(arg)) return Math.max(...arg);
+                        if (arg instanceof PythonList || arg instanceof PythonTuple) return Math.max(...arg.items);
+                        if (arg instanceof PythonSet) return Math.max(...Array.from(arg.items));
                     }
                     return Math.max(...args);
                 },
                 type: (obj: any) => {
                     if (obj === null) return 'NoneType';
                     if (obj instanceof PythonList) return 'list';
+                    if (obj instanceof PythonSet) return 'set';
+                    if (obj instanceof PythonTuple) return 'tuple';
                     if (Array.isArray(obj)) return 'list';
                     if (typeof obj === 'object') return 'dict';
                     return typeof obj;
                 },
+                set: (iterable: any) => new PythonSet(iterable),
+                tuple: (iterable: any) => new PythonTuple(iterable),
                 bool: (obj: any) => Boolean(obj),
                 sum: (arr: any) => {
-                    const items = arr instanceof PythonList ? arr.items : arr;
+                    let items: any[] = [];
+                    if (arr instanceof PythonList || arr instanceof PythonTuple) items = arr.items;
+                    else if (arr instanceof PythonSet) items = Array.from(arr.items);
+                    else if (Array.isArray(arr)) items = arr;
+
                     return items.reduce((a: number, b: number) => a + b, 0);
                 }
             }
         };
-        declareVariable(state.scope, '__pythonRuntime', pythonRuntime);
+
+        const pythonStringMethods: Record<string, (str: string, ...args: any[]) => any> = {
+            lower: (str) => str.toLowerCase(),
+            upper: (str) => str.toUpperCase(),
+            strip: (str, chars?: string) => {
+                if (!chars) return str.trim();
+                const pattern = `^[${chars}]+|[${chars}]+$`;
+                return str.replace(new RegExp(pattern, 'g'), '');
+            },
+            lstrip: (str, chars?: string) => {
+                if (!chars) return str.trimStart();
+                const pattern = `^[${chars}]+`;
+                return str.replace(new RegExp(pattern, 'g'), '');
+            },
+            rstrip: (str, chars?: string) => {
+                if (!chars) return str.trimEnd();
+                const pattern = `[${chars}]+$`;
+                return str.replace(new RegExp(pattern, 'g'), '');
+            },
+            split: (str, sep?: string, maxsplit: number = -1) => {
+                if (sep === undefined || sep === null) {
+                    // Python's default split behavior (whitespace), filtering empty strings
+                    const parts = str.trim().split(/\s+/);
+                    return new PythonList(parts[0] === '' ? [] : parts);
+                }
+                const result = str.split(sep);
+                if (maxsplit >= 0 && result.length > maxsplit + 1) {
+                    const leftover = result.slice(maxsplit).join(sep);
+                    const finalArr = result.slice(0, maxsplit);
+                    finalArr.push(leftover);
+                    return new PythonList(finalArr);
+                }
+                return new PythonList(result);
+            },
+            join: (str, iterable: any) => {
+                let items: any[] = [];
+                if (Array.isArray(iterable)) items = iterable;
+                else if (iterable instanceof PythonList || iterable instanceof PythonTuple) items = iterable.items;
+                else if (iterable instanceof PythonSet) items = Array.from(iterable.items);
+
+                return items.join(str);
+            },
+            replace: (str, oldVal: string, newVal: string, count: number = -1) => {
+                if (count === undefined || count === -1) {
+                    // Replace ALL occurrences using split/join pattern for reliable global replacement
+                    return str.split(oldVal).join(newVal);
+                }
+                let result = str;
+                for (let i = 0; i < count; i++) {
+                    result = result.replace(oldVal, newVal);
+                }
+                return result;
+            },
+            find: (str, sub: string, start: number = 0, end: number = str.length) => {
+                if (start < 0) start = Math.max(0, str.length + start);
+                if (end < 0) end = Math.max(0, str.length + end);
+                const slice = str.slice(start, end);
+                const idx = slice.indexOf(sub);
+                return idx === -1 ? -1 : start + idx;
+            },
+            count: (str, sub: string, start: number = 0, end: number = str.length) => {
+                if (start < 0) start = Math.max(0, str.length + start);
+                if (end < 0) end = Math.max(0, str.length + end);
+                const slice = str.slice(start, end);
+                return slice.split(sub).length - 1;
+            },
+            startswith: (str, prefix: string | string[]) => {
+                if (Array.isArray(prefix)) return prefix.some(p => str.startsWith(p));
+                // Handle Tuple of prefixes? We need to accept PythonTuple too?
+                // For now assuming strings or array of strings (from tuple conversion)
+                // If prefix is PythonTuple, we should unwrap it.
+                // However, TS signature `...args: any[]` allows catching the tuple.
+                return str.startsWith(prefix as string);
+            },
+            endswith: (str, suffix: string | string[]) => {
+                if (Array.isArray(suffix)) return suffix.some(s => str.endsWith(s));
+                return str.endsWith(suffix as string);
+            },
+            format: (str, ...args: any[]) => {
+                // Very basic implementation: replace {}
+                let i = 0;
+                return str.replace(/\{\}/g, () => {
+                    const arg = args[i++];
+                    if (arg === undefined) return '{}';
+                    if (typeof arg === 'object' && arg !== null) {
+                        // Use our existing string conversion
+                        if (arg.toString) return arg.toString();
+                        return JSON.stringify(arg);
+                    }
+                    return String(arg);
+                });
+            }
+        };
+
+        declareVariable(state.scope, '__pythonRuntime', { ...pythonRuntime, stringMethods: pythonStringMethods });
+
 
         // Expose Python built-ins to global scope
         Object.entries(pythonRuntime.functions).forEach(([name, func]) => {
@@ -556,9 +1079,43 @@ function evaluateStatement(
 
     if (t.isVariableDeclaration(statement)) {
         statement.declarations.forEach(decl => {
+            const value = decl.init ? evaluateExpression(decl.init, state, code) : undefined;
+
             if (t.isIdentifier(decl.id)) {
-                const value = decl.init ? evaluateExpression(decl.init, state, code) : undefined;
                 declareVariable(state.scope, decl.id.name, value);
+            } else if (t.isArrayPattern(decl.id)) {
+                // Array destructuring: const [a, b] = [1, 2]
+                const arr = Array.isArray(value) ? value : (value as PythonList)?.items || [];
+                decl.id.elements.forEach((element, i) => {
+                    if (t.isIdentifier(element)) {
+                        declareVariable(state.scope, element.name, arr[i]);
+                    }
+                });
+            } else if (t.isObjectPattern(decl.id)) {
+                // Object destructuring: const { a, b } = { a: 1, b: 2 }
+                const obj = value as Record<string, unknown>;
+                if (obj || value === undefined) { // Allow destructuring undefined/null if patterns invoke errors? No, usually throws. But here we might be lenient or strict. JS throws.
+                    // For safety in interpreter, let's assume obj is valid or handle gracefully.
+                    // If strict JS, value must be coercible to object.
+                }
+
+                decl.id.properties.forEach(prop => {
+                    if (t.isObjectProperty(prop)) {
+                        if (t.isIdentifier(prop.key) && t.isIdentifier(prop.value)) {
+                            // { a: b } or { a } (shorthand is key=value same name in AST usually?)
+                            // In babel, shorthand: key=Identifier(a), value=Identifier(a), shorthand=true
+                            const val = obj ? obj[prop.key.name] : undefined;
+                            declareVariable(state.scope, prop.value.name, val);
+                        } else if (t.isIdentifier(prop.key) && t.isAssignmentPattern(prop.value) && t.isIdentifier(prop.value.left)) {
+                            // Default value: const { a = 10 } = {}
+                            const existing = obj ? obj[prop.key.name] : undefined;
+                            const val = existing !== undefined
+                                ? existing
+                                : evaluateExpression(prop.value.right, state, code);
+                            declareVariable(state.scope, prop.value.left.name, val);
+                        }
+                    }
+                });
             }
         });
         return undefined;
@@ -1079,6 +1636,35 @@ function evaluateExpression(
             return value;
         }
 
+        if (t.isArrayPattern(expression.left)) {
+            const arr = Array.isArray(value) ? value : (value as PythonList)?.items || [];
+            expression.left.elements.forEach((element, i) => {
+                if (t.isIdentifier(element)) {
+                    setVariable(state.scope, element.name, arr[i]);
+                }
+            });
+            return value;
+        }
+
+        if (t.isObjectPattern(expression.left)) {
+            const obj = value as Record<string, unknown>;
+            expression.left.properties.forEach(prop => {
+                if (t.isObjectProperty(prop)) {
+                    if (t.isIdentifier(prop.key) && t.isIdentifier(prop.value)) {
+                        const val = obj ? obj[prop.key.name] : undefined;
+                        setVariable(state.scope, prop.value.name, val);
+                    } else if (t.isIdentifier(prop.key) && t.isAssignmentPattern(prop.value) && t.isIdentifier(prop.value.left)) {
+                        const existing = obj ? obj[prop.key.name] : undefined;
+                        const val = existing !== undefined
+                            ? existing
+                            : evaluateExpression(prop.value.right, state, code);
+                        setVariable(state.scope, prop.value.left.name, val);
+                    }
+                }
+            });
+            return value;
+        }
+
         return value;
     }
 
@@ -1091,6 +1677,17 @@ function evaluateExpression(
                 : undefined;
 
         if (obj && prop !== undefined) {
+            // Intercept string methods for Python
+            // Intercept string methods for Python
+            if (typeof obj === 'string') {
+                // Check if runtime has stringMethods (only in Python mode)
+                const runtime = lookupVariable(state.scope, '__pythonRuntime') as any;
+                if (runtime && runtime.stringMethods && typeof prop === 'string' && runtime.stringMethods[prop]) {
+                    return (runtime.stringMethods[prop] as Function).bind(null, obj);
+                }
+                // Fallback to JS string methods (e.g. substring)
+            }
+
             const value = obj[prop as string];
             // Handle console.log as special case
             if (typeof value === 'function') {
@@ -1257,6 +1854,15 @@ function evaluateExpression(
                 : t.isIdentifier(calleeNode.property)
                     ? calleeNode.property.name
                     : evaluateExpression(calleeNode.property as t.Expression, state, code) as string;
+
+            if (obj && typeof obj === 'string') {
+                const runtime = lookupVariable(state.scope, '__pythonRuntime') as any;
+                if (runtime && runtime.stringMethods && runtime.stringMethods[prop]) {
+                    const method = runtime.stringMethods[prop];
+                    const args = collectArguments(expression.arguments, state, code);
+                    return method(obj, ...args);
+                }
+            }
 
             if (obj && obj.__className) {
                 const className = obj.__className as string;
