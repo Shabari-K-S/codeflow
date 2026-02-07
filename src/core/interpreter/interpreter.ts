@@ -25,6 +25,8 @@ interface InterpreterState {
     classes: Map<string, t.ClassDeclaration>;
     memory?: CMemory;
     structDefs?: Map<string, CStructDef>;
+    variableAddresses?: Map<string, number>; // Map variable names to virtual addresses (for &var)
+    objectAddresses?: WeakMap<object, number>; // Map objects (arrays) to virtual addresses
 }
 
 interface Scope {
@@ -528,7 +530,42 @@ function bindParameters(
 
         if (t.isIdentifier(actualParam)) {
             // Regular parameter
-            declareVariable(scope, actualParam.name, args[i]);
+            const val = args[i];
+            declareVariable(scope, actualParam.name, val);
+
+            // C-specific: Allocate parameter on stack
+            if (state.memory && state.variableAddresses) {
+                let type = 'int';
+                let size = 4;
+                // Extract type from typeAnnotation
+                if (actualParam.typeAnnotation && t.isTSTypeAnnotation(actualParam.typeAnnotation)) {
+                    const typeRef = actualParam.typeAnnotation.typeAnnotation;
+                    if (t.isTSTypeReference(typeRef) && t.isIdentifier(typeRef.typeName)) {
+                        type = typeRef.typeName.name;
+                    }
+                }
+
+                // Simple size lookup
+                if (type === 'char') size = 1;
+                else if (type === 'double' || type === 'long') size = 8;
+                else if (type.includes('*')) size = 4; // pointer
+                else if (state.structDefs && state.structDefs.has(type)) {
+                    size = state.structDefs.get(type)!.size;
+                }
+
+                const addr = state.memory.allocStackVariable(actualParam.name, type, size);
+                state.variableAddresses.set(actualParam.name, addr);
+
+                if (val !== undefined) {
+                    try {
+                        if (val instanceof CPointer) {
+                            state.memory.write(addr, val.address);
+                        } else {
+                            state.memory.write(addr, val);
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            }
         } else if (t.isAssignmentPattern(actualParam) && t.isIdentifier(actualParam.left)) {
             // Default parameter: function foo(x = 10)
             const value = args[i] !== undefined
@@ -805,6 +842,8 @@ export function executeCode(
 
     if (language === 'c') {
         state.memory = new CMemory();
+        state.variableAddresses = new Map();
+        state.objectAddresses = new WeakMap();
     }
 
     // First pass: collect function and class declarations
@@ -1167,6 +1206,17 @@ export function executeCode(
                     }
                     return { __ptr: true, __size: size, __data: new Array(size).fill(0) };
                 },
+                calloc: (num: number, size: number) => {
+                    const totalSize = num * size;
+                    if (state.memory) {
+                        const ptr = state.memory.malloc(totalSize, state.steps.length);
+                        // Initialize memory to 0 (malloc might return recycled memory which is not guaranteed to be 0 in real C, 
+                        // but our CMemory.malloc initializes to 0. Let's obtain the block and ensure 0 to succeed 'calloc' contract)
+                        // Actually CMemory.malloc implementation: new Array(size).fill(0). So it is zeroed.
+                        return ptr;
+                    }
+                    return { __ptr: true, __size: totalSize, __data: new Array(totalSize).fill(0) };
+                },
                 free: (ptr: any) => {
                     if (state.memory && typeof ptr === 'number') {
                         state.memory.free(ptr, state.steps.length);
@@ -1278,6 +1328,49 @@ function evaluateStatement(
 
             if (t.isIdentifier(decl.id)) {
                 declareVariable(state.scope, decl.id.name, value);
+
+                // C-specific: Allocate on stack memory
+                if (state.memory && state.variableAddresses) {
+                    let type = 'int';
+                    let size = 4;
+                    // Extract type from typeAnnotation
+                    if (decl.id.typeAnnotation && t.isTSTypeAnnotation(decl.id.typeAnnotation)) {
+                        const typeRef = decl.id.typeAnnotation.typeAnnotation;
+                        if (t.isTSTypeReference(typeRef) && t.isIdentifier(typeRef.typeName)) {
+                            type = typeRef.typeName.name;
+                        }
+                    }
+                    // Simple size lookup (should use structDefs)
+                    if (type === 'char') size = 1;
+                    else if (type === 'double' || type === 'long') size = 8;
+                    else if (type.includes('*')) size = 4; // pointer
+                    else if (state.structDefs && state.structDefs.has(type)) {
+                        size = state.structDefs.get(type)!.size;
+                    }
+
+                    const addr = state.memory.allocStackVariable(decl.id.name, type, size);
+                    state.variableAddresses.set(decl.id.name, addr);
+
+                    // Write initial value if present
+                    if (value !== undefined) {
+                        try {
+                            // If value is CPointer, write its address?
+                            // CMemory.write handles values.
+                            // If user writes int *p = malloc(...), value is CPointer(addr).
+                            // We should write the address to the stack variable.
+                            // But CMemory.write takes 'any'. 
+                            // If I write CPointer object, CMemory stores it?
+                            // CMemory.write implementation needs check.
+                            // If CMemory stores bytes, it expects number.
+                            // CPointer has .address.
+                            if (value instanceof CPointer) {
+                                state.memory.write(addr, value.address);
+                            } else {
+                                state.memory.write(addr, value);
+                            }
+                        } catch (e) { /* ignore */ }
+                    }
+                }
             } else if (t.isArrayPattern(decl.id)) {
                 // Array destructuring: const [a, b] = [1, 2]
                 const arr = Array.isArray(value) ? value : (value as PythonList)?.items || [];
@@ -1783,8 +1876,18 @@ function evaluateExpression(
             const current = lookupVariable(state.scope, expression.argument.name) as number;
             const newValue = expression.operator === '++' ? current + 1 : current - 1;
             setVariable(state.scope, expression.argument.name, newValue);
+
+            // C-specific: Update memory
+            if (state.memory && state.variableAddresses && state.variableAddresses.has(expression.argument.name)) {
+                try {
+                    const addr = state.variableAddresses.get(expression.argument.name)!;
+                    state.memory.write(addr, newValue);
+                } catch (e) { /* ignore */ }
+            }
+
             return expression.prefix ? newValue : current;
         }
+
         return undefined;
     }
 
@@ -1812,6 +1915,19 @@ function evaluateExpression(
                 }
             }
             setVariable(state.scope, expression.left.name, finalValue);
+
+            // C-specific: Update memory
+            if (state.memory && state.variableAddresses && state.variableAddresses.has(expression.left.name)) {
+                try {
+                    const addr = state.variableAddresses.get(expression.left.name)!;
+                    if (finalValue instanceof CPointer) {
+                        state.memory.write(addr, finalValue.address);
+                    } else {
+                        state.memory.write(addr, finalValue);
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
             return finalValue;
         }
 
@@ -2171,8 +2287,118 @@ function evaluateExpression(
             }
 
             if (name === '__addr') {
-                // Not fully implemented yet as it requires lvalue resolution
+                const arg0 = expression.arguments[0];
+                if (t.isIdentifier(arg0) && state.variableAddresses) {
+                    const varName = arg0.name;
+                    // Check if variable exists in scope
+                    // Note: This logic assumes variable is declared.
+                    // We assign a virtual address for visualization/printf purposes.
+                    // This address is NOT backed by real memory read/write yet unless mapped.
+                    if (!state.variableAddresses.has(varName)) {
+                        // Assign a virtual address in "Data/Stack" segment (e.g., 0x200 - 0xFFF)
+                        // Heap starts at 4096 (0x1000).
+                        const nextAddr = 512 + (state.variableAddresses.size * 4);
+                        state.variableAddresses.set(varName, nextAddr);
+                    }
+                    return state.variableAddresses.get(varName);
+                }
                 return 0;
+            }
+
+            if (name === '__cast') {
+                const val = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const typeArg = expression.arguments[1];
+                let type = 'void*';
+                if (t.isStringLiteral(typeArg)) {
+                    type = typeArg.value;
+                }
+
+                if (typeof val === 'number') {
+                    return new CPointer(type, val);
+                }
+                if (val instanceof CPointer) {
+                    return new CPointer(type, val.address);
+                }
+                if (Array.isArray(val) && state.objectAddresses) {
+                    if (!state.objectAddresses.has(val)) {
+                        // Assign stable unique address for this array object
+                        // Use a range distinct from likely stack/heap/globals
+                        // e.g. 0x2000 + random
+                        state.objectAddresses.set(val, 0x2000 + Math.floor(Math.random() * 10000) * 4);
+                    }
+                    return new CPointer(type, state.objectAddresses.get(val)!);
+                }
+                return val;
+            }
+
+            if (name === '__index') {
+                const ptr = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const index = evaluateExpression(expression.arguments[1] as t.Expression, state, code) as number;
+
+                if (ptr instanceof CPointer) {
+                    let elemType = ptr.type.endsWith('*') ? ptr.type.slice(0, -1).trim() : ptr.type;
+                    // Handle 'int*' -> 'int', 'char*' -> 'char'
+
+                    let elemSize = 4;
+                    if (elemType === 'char') elemSize = 1;
+                    else if (elemType === 'short') elemSize = 2;
+                    else if (elemType === 'double') elemSize = 8;
+                    else if (state.structDefs) {
+                        const structName = elemType.replace(/^struct\s+/, '');
+                        if (state.structDefs.has(structName)) {
+                            elemSize = state.structDefs.get(structName)!.size;
+                        }
+                    }
+
+                    const addr = ptr.address + (index * elemSize);
+                    return state.memory?.read(addr);
+                }
+
+                if (Array.isArray(ptr)) {
+                    // Safe JS array access
+                    return ptr[index];
+                }
+                if (typeof ptr === 'number' && state.memory) {
+                    // Fallback: assume byte access or int access?
+                    // Without type, we guess. cParser usually transforms based on type if it could, but it defers to here.
+                    // Use 1 byte default for untyped pointer arithmetic emulation?
+                    return state.memory.read(ptr + index);
+                }
+                return undefined;
+            }
+
+            if (name === '__assign_index') {
+                const ptr = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const index = evaluateExpression(expression.arguments[1] as t.Expression, state, code) as number;
+                const val = evaluateExpression(expression.arguments[2] as t.Expression, state, code);
+
+                if (ptr instanceof CPointer && state.memory) {
+                    let elemType = ptr.type.endsWith('*') ? ptr.type.slice(0, -1).trim() : ptr.type;
+
+                    let elemSize = 4;
+                    if (elemType === 'char') elemSize = 1;
+                    else if (elemType === 'short') elemSize = 2;
+                    else if (elemType === 'double') elemSize = 8;
+                    else if (state.structDefs) {
+                        const structName = elemType.replace(/^struct\s+/, '');
+                        if (state.structDefs.has(structName)) {
+                            elemSize = state.structDefs.get(structName)!.size;
+                        }
+                    }
+
+                    const addr = ptr.address + (index * elemSize);
+                    state.memory.write(addr, val);
+                    return val;
+                }
+                if (Array.isArray(ptr)) {
+                    ptr[index] = val;
+                    return val;
+                }
+                if (typeof ptr === 'number' && state.memory) {
+                    state.memory.write(ptr + index, val);
+                    return val;
+                }
+                return val;
             }
 
             if (name === '__sizeof') {
@@ -2349,6 +2575,11 @@ function evaluateExpression(
             });
             state.callStack.push(frame);
 
+            // C-specific: Push memory stack frame
+            if (state.memory) {
+                state.memory.pushFrame(funcName);
+            }
+
             // Save current scope and switch to function scope
             const previousScope = state.scope;
             state.scope = funcScope;
@@ -2371,6 +2602,11 @@ function evaluateExpression(
             // Restore scope and pop call frame
             state.scope = previousScope;
             state.callStack.pop();
+
+            // C-specific: Pop memory stack frame
+            if (state.memory) {
+                state.memory.popFrame();
+            }
 
             return returnValue;
         }

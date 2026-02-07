@@ -733,6 +733,9 @@ class CParser {
                     if (left.callee.name === '__arrow') {
                         return t.callExpression(t.identifier('__assign_arrow'), [left.arguments[0], left.arguments[1], right]);
                     }
+                    if (left.callee.name === '__index') {
+                        return t.callExpression(t.identifier('__assign_index'), [left.arguments[0], left.arguments[1], right]);
+                    }
                 }
                 return t.assignmentExpression('=', left as any, right);
             }
@@ -741,7 +744,6 @@ class CParser {
             return t.assignmentExpression('=', left as any,
                 t.binaryExpression(binaryOp, left, right));
         }
-
         return left;
     }
 
@@ -920,12 +922,12 @@ class CParser {
         let expr = this.parsePrimary();
 
         while (true) {
-            // Array access
+            // Array access a[b] -> __index(a, b)
             if (this.match('PUNCTUATION', '[')) {
                 this.advance();
                 const index = this.parseExpression();
                 this.expect('PUNCTUATION', ']');
-                expr = t.memberExpression(expr, index, true);
+                expr = t.callExpression(t.identifier('__index'), [expr, index]);
             }
             // Function call
             else if (this.match('PUNCTUATION', '(')) {
@@ -976,9 +978,10 @@ class CParser {
             this.advance();
             // Check if this is a type cast
             if (this.isType()) {
-                this.parseType(); // Ignore cast type for now
+                const type = this.parseType();
                 this.expect('PUNCTUATION', ')');
-                return this.parseUnary();
+                const expr = this.parseUnary();
+                return t.callExpression(t.identifier('__cast'), [expr, t.stringLiteral(type)]);
             }
             const expr = this.parseExpression();
             this.expect('PUNCTUATION', ')');

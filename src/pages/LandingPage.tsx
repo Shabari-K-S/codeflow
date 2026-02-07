@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { LandingNavbar } from './LandingNavbar';
 import './LandingPage.css';
 
 export function LandingPage() {
@@ -7,6 +8,7 @@ export function LandingPage() {
 
     return (
         <div className="landing-page">
+            <LandingNavbar />
             <div className="landing-content">
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -43,7 +45,7 @@ export function LandingPage() {
                     </motion.button>
                 </motion.div>
             </div>
-
+            <div id="features"></div>
             <div className="features-section">
                 <div className="features-container">
                     <FeatureRow

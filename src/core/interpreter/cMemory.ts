@@ -25,6 +25,7 @@ interface MemoryBlock {
     allocLine: number;      // Line number where allocated
     freeLine?: number;      // Line number where freed (if freed)
     type: string;           // Type of data stored
+    stack?: boolean;        // Is this stack memory?
 }
 
 interface StackFrame {
@@ -295,6 +296,10 @@ export class CMemory {
             throw new Error(`free: invalid pointer 0x${ptr.toString(16)}`);
         }
 
+        if (block.stack) {
+            throw new Error(`Invalid free: cannot free stack memory at 0x${ptr.toString(16)}`);
+        }
+
         if (block.freed) {
             throw new Error(`double free detected at address 0x${ptr.toString(16)}`);
         }
@@ -413,6 +418,14 @@ export class CMemory {
     popFrame(): StackFrame | undefined {
         const frame = this.stackFrames.pop();
         if (frame) {
+            // Cleanup stack memory blocks
+            frame.variables.forEach(v => {
+                this.heap.delete(v.address);
+                for (let i = 0; i < v.size; i++) {
+                    this.addressToBlock.delete(v.address + i);
+                }
+            });
+
             this.currentStackAddress = frame.baseAddress;
         }
         return frame;
@@ -429,13 +442,30 @@ export class CMemory {
         const frame = this.stackFrames[this.stackFrames.length - 1];
         this.currentStackAddress -= size;
 
+        const address = this.currentStackAddress;
+
         frame.variables.set(name, {
-            address: this.currentStackAddress,
+            address,
             size,
             type
         });
 
-        return this.currentStackAddress;
+        // Create Memory Block for Stack Variable
+        const block: MemoryBlock = {
+            address,
+            size,
+            data: new Array(size).fill(0),
+            freed: false,
+            allocLine: 0,
+            type,
+            stack: true
+        };
+        this.heap.set(address, block);
+        for (let i = 0; i < size; i++) {
+            this.addressToBlock.set(address + i, address);
+        }
+
+        return address;
     }
 
     // ========================================================================
@@ -449,6 +479,7 @@ export class CMemory {
         const leaks: Array<{ address: number; size: number; line: number }> = [];
 
         this.heap.forEach((block) => {
+            if (block.stack) return;
             if (!block.freed) {
                 leaks.push({
                     address: block.address,
@@ -484,6 +515,7 @@ export class CMemory {
         }> = [];
 
         this.heap.forEach((block) => {
+            if (block.stack) return;
             blocks.push({
                 address: block.address,
                 size: block.size,
@@ -529,6 +561,7 @@ export class CMemory {
     getTotalAllocated(): number {
         let total = 0;
         this.heap.forEach((block) => {
+            if (block.stack) return;
             if (!block.freed) {
                 total += block.size;
             }
@@ -542,6 +575,7 @@ export class CMemory {
     getTotalFreed(): number {
         let total = 0;
         this.heap.forEach((block) => {
+            if (block.stack) return;
             if (block.freed) {
                 total += block.size;
             }

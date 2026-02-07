@@ -3,10 +3,12 @@
     align-items: center;
     height: var(--header-height);
     padding: 0 var(--space-4);
-    background-color: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border-primary);
+    background: linear-gradient(to bottom, var(--color-bg-secondary), #0f0f13);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     gap: var(--space-6);
     position: relative;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 10;
 }
 
 /* Brand Section */
@@ -37,11 +39,14 @@
 
 .header__version {
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    background-color: var(--color-bg-tertiary);
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    margin-left: var(--space-1);
+    color: #fff;
+    background: linear-gradient(135deg, var(--color-accent-purple), var(--color-accent-blue));
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    margin-left: var(--space-2);
+    font-weight: 600;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    letter-spacing: 0.5px;
 }
 
 /* Actions Section */

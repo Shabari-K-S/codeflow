@@ -26,7 +26,7 @@ export function Header() {
                 <h1 className="header__title">
                     Code<span className="header__title-accent">Flow</span>
                 </h1>
-                <span className="header__version">v1.0</span>
+                <span className="header__version">v2.0</span>
             </div>
 
             <div className="header__actions">
