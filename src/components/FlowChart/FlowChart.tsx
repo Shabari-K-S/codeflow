@@ -310,7 +310,7 @@ export function FlowChart() {
                             return null;
                         };
 
-                        return globalEdges.map((edge, index) => {
+                        return globalEdges.map((edge) => {
                             const sourceInfo = getNodeAbsPos(edge.source);
                             // For call edges, target the function entry node for cleaner connection
                             const targetInfo = edge.type === 'call'
@@ -324,7 +324,7 @@ export function FlowChart() {
                             const sourceLayout = { ...sourceInfo.node, x: sourceInfo.x, y: sourceInfo.y };
                             const targetLayout = { ...targetInfo.node, x: targetInfo.x, y: targetInfo.y };
 
-                            const path = generateEdgePath(sourceLayout, targetLayout, edge.type, undefined, index);
+                            const path = generateEdgePath(sourceLayout, targetLayout, edge.type);
 
                             // Style for Global Edges (usually Calls)
                             const isCall = edge.type === 'call';
@@ -452,7 +452,7 @@ export function FlowChart() {
 
                                 {/* Edges */}
                                 <g className="edges">
-                                    {comp.edges.map((edge, index) => {
+                                    {comp.edges.map((edge) => {
                                         const source = comp.nodes.find(n => n.id === edge.source);
                                         const target = comp.nodes.find(n => n.id === edge.target);
 
@@ -469,8 +469,6 @@ export function FlowChart() {
                                             source,
                                             target,
                                             edge.type,
-                                            comp.width / 2,
-                                            index,
                                             edgePoints // NEW: Pass points
                                         );
                                         const isActive = source.lineNumber === currentLine || target.lineNumber === currentLine;

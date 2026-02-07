@@ -109,16 +109,17 @@ describe('Visualizer Layout', () => {
             type: 'process', label: 'B', column: 0, row: 0,
             code: '', lineNumber: 0
         };
-        const nodeC: LayoutNode = {
-            id: 'C', x: 100, y: 50, width: 100, height: 40,
-            type: 'process', label: 'C', column: 0, row: 0,
-            code: '', lineNumber: 0
-        };
+
+        // const nodeC: LayoutNode = {
+        //     id: 'C', x: 100, y: 50, width: 100, height: 40,
+        //     type: 'process', label: 'C', column: 0, row: 0,
+        //     code: '', lineNumber: 0
+        // };
 
         it('should use provided edge points (Dagre) if available', () => {
             // Mock points from Dagre
             const points = [{ x: 100, y: 100 }, { x: 200, y: 200 }, { x: 300, y: 300 }];
-            const path = generateEdgePath(nodeA, nodeB, 'normal', undefined, 0, points);
+            const path = generateEdgePath(nodeA, nodeB, 'normal', points);
 
             // Should construct path from points
             expect(path).toBe('M 100 100 L 200 200 L 300 300');

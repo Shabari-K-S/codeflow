@@ -363,8 +363,6 @@ export function generateEdgePath(
     source: LayoutNode,
     target: LayoutNode,
     edgeType: string = 'normal',
-    maxX?: number,
-    offsetIndex: number = 0,
     edgePoints?: { x: number, y: number }[] // NEW: Optional points from Dagre
 ): string {
 
@@ -404,7 +402,7 @@ export function generateEdgePath(
         const targetTop = { x: target.x, y: target.y - target.height / 2 };
 
         const dy = targetTop.y - sourceBottom.y;
-        const dx = targetTop.x - sourceBottom.x;
+
 
         // Control Points for Cubic Bezier
         // Curve out downwards, then curve in downwards
@@ -425,19 +423,16 @@ export function generateEdgePath(
     // --- FALLBACK: Standard / Manual Routing ---
     // (Used if no points provided, e.g. cross-component edges without points)
 
-    return generateEdgePathLegacy(source, target, edgeType, maxX, offsetIndex);
+    return generateEdgePathLegacy(source, target);
 }
 
 // Rename the old function to keep as fallback
 function generateEdgePathLegacy(
     source: LayoutNode,
-    target: LayoutNode,
-    edgeType: string = 'normal',
-    maxX?: number,
-    offsetIndex: number = 0
+    target: LayoutNode
 ): string {
     const dx = target.x - source.x;
-    const dy = target.y - source.y;
+
     const sourceBottom = { x: source.x, y: source.y + source.height / 2 };
     const targetTop = { x: target.x, y: target.y - target.height / 2 };
 
