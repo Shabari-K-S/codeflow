@@ -364,3 +364,22 @@
         justify-content: center;
     }
 }
+
+.scroll-indicator {
+    margin-top: 4rem;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.6);
+    transition: color 0.3s ease;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.scroll-indicator:hover {
+    color: var(--primary-color);
+}
+
+.scroll-indicator svg {
+    width: 32px;
+    height: 32px;
+}

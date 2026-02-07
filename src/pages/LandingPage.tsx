@@ -43,6 +43,24 @@ export function LandingPage() {
                         Get Started
                         <span className="arrow">→</span>
                     </motion.button>
+
+                    <motion.div
+                        className="scroll-indicator"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1, y: [0, 10, 0] }}
+                        transition={{
+                            opacity: { delay: 1, duration: 1 },
+                            y: { duration: 1.5, repeat: Infinity, ease: "easeInOut" }
+                        }}
+                        onClick={() => {
+                            const featuresSection = document.getElementById('features');
+                            featuresSection?.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                    >
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M7 13l5 5 5-5M7 6l5 5 5-5" />
+                        </svg>
+                    </motion.div>
                 </motion.div>
             </div>
             <div id="features"></div>

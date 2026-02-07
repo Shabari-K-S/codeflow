@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { identifyComponents, removeMergeNodes } from './layout';
+import { identifyComponents, removeMergeNodes, generateEdgePath } from './layout';
+import type { LayoutNode } from './layout';
 import type { FlowNode, FlowEdge } from '../../types';
 
 describe('Visualizer Layout', () => {
@@ -93,6 +94,54 @@ describe('Visualizer Layout', () => {
 
             const result = identifyComponents(nodes, edges);
             expect(result).toHaveLength(2);
+        });
+    });
+
+    describe('generateEdgePath', () => {
+        // Mock LayoutNodes
+        const nodeA: LayoutNode = {
+            id: 'A', x: 100, y: 100, width: 100, height: 40,
+            type: 'process', label: 'A', column: 0, row: 0,
+            code: '', lineNumber: 0
+        };
+        const nodeB: LayoutNode = {
+            id: 'B', x: 300, y: 300, width: 100, height: 40,
+            type: 'process', label: 'B', column: 0, row: 0,
+            code: '', lineNumber: 0
+        };
+        const nodeC: LayoutNode = {
+            id: 'C', x: 100, y: 50, width: 100, height: 40,
+            type: 'process', label: 'C', column: 0, row: 0,
+            code: '', lineNumber: 0
+        };
+
+        it('should use provided edge points (Dagre) if available', () => {
+            // Mock points from Dagre
+            const points = [{ x: 100, y: 100 }, { x: 200, y: 200 }, { x: 300, y: 300 }];
+            const path = generateEdgePath(nodeA, nodeB, 'normal', undefined, 0, points);
+
+            // Should construct path from points
+            expect(path).toBe('M 100 100 L 200 200 L 300 300');
+        });
+
+        it('should generate Cubic Bezier curve for CALL edges', () => {
+            // A(100,100) -> B(300,300)
+            const path = generateEdgePath(nodeA, nodeB, 'call');
+
+            // Should contain Bezier command 'C'
+            expect(path).toContain('C');
+            // Starts at source bottom (100, 120)
+            expect(path).toContain('M 100 120');
+            // Ends at target top (300, 280)
+            // The format is C cp1x cp1y, cp2x cp2y, endx endy
+            expect(path).toContain(', 300 280');
+        });
+
+        it('should fallback to Z-shape if no points and not call', () => {
+            // Standard behavior
+            const path = generateEdgePath(nodeA, nodeB, 'normal');
+            expect(path).toContain('Q'); // Quadratic curves for rounded corners
+            expect(path).not.toContain('C'); // No Cubic Bezier
         });
     });
 });
