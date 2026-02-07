@@ -110,14 +110,14 @@ export function CodeEditor() {
                 <div className="code-editor__tabs">
                     <div className="code-editor__tab code-editor__tab--active">
                         <span className="code-editor__tab-icon">📄</span>
-                        <span>main.{language === 'javascript' ? 'js' : 'py'}</span>
+                        <span>main.{language === 'javascript' ? 'js' : (language === 'python' ? 'py' : 'c')}</span>
                     </div>
                 </div>
             </div>
             <div className="code-editor__content">
                 <Editor
                     height="100%"
-                    language={language === 'javascript' ? 'javascript' : 'python'}
+                    language={language === 'javascript' ? 'javascript' : (language === 'python' ? 'python' : 'c')}
                     value={code}
                     onChange={(value) => setCode(value || '')}
                     onMount={handleEditorMount}

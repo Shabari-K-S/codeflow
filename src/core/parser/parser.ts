@@ -1,6 +1,7 @@
 import * as parser from '@babel/parser';
 import * as t from '@babel/types';
 import { parsePythonCode } from './pythonParser.ts';
+import { parseCCode } from './cParser.ts';
 import type { FlowNode, FlowEdge, FlowGraph, FlowNodeType } from '../../types';
 
 let nodeIdCounter = 0;
@@ -172,9 +173,13 @@ function getCodeForNode(node: t.Node, code: string): string {
     return '';
 }
 
-export function parseCode(code: string, language: 'javascript' | 'python'): t.File {
+export function parseCode(code: string, language: 'javascript' | 'python' | 'c'): t.File {
     if (language === 'python') {
         return parsePythonCode(code);
+    }
+
+    if (language === 'c') {
+        return parseCCode(code);
     }
 
     return parser.parse(code, {
@@ -184,7 +189,7 @@ export function parseCode(code: string, language: 'javascript' | 'python'): t.Fi
     });
 }
 
-export function generateFlowGraph(ast: t.File, code: string, language: 'javascript' | 'python' = 'javascript'): FlowGraph {
+export function generateFlowGraph(ast: t.File, code: string, language: 'javascript' | 'python' | 'c' = 'javascript'): FlowGraph {
     nodeIdCounter = 0;
     const nodes: FlowNode[] = [];
     const edges: FlowEdge[] = [];

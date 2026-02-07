@@ -1,6 +1,9 @@
 import * as parser from '@babel/parser';
 import * as t from '@babel/types';
 import { parsePythonCode } from '../parser/pythonParser.ts';
+import { parseCCode } from '../parser/cParser.ts';
+import { printf, CInt, CFloat, CDouble, CChar, CArray, CStructDef, createCType, getDefaultValue } from './cRuntime.ts';
+import { CMemory, CPointer } from './cMemory.ts';
 import type {
     ExecutionTrace,
     ExecutionStep,
@@ -20,11 +23,39 @@ interface InterpreterState {
     breakpoints: number[];
     functions: Map<string, t.FunctionDeclaration>;
     classes: Map<string, t.ClassDeclaration>;
+    memory?: CMemory;
+    structDefs?: Map<string, CStructDef>;
 }
 
 interface Scope {
     variables: Map<string, unknown>;
     parent: Scope | null;
+}
+
+export class CVariable {
+    public address: number;
+    public type: string;
+    constructor(address: number, type: string) {
+        this.address = address;
+        this.type = type;
+    }
+    toString() { return `<CVar ${this.type} @ 0x${this.address.toString(16)}>`; }
+}
+
+export class CStructRef {
+    public address: number;
+    public def: CStructDef;
+    public memory: CMemory;
+
+    constructor(address: number, def: CStructDef, memory: CMemory) {
+        this.address = address;
+        this.def = def;
+        this.memory = memory;
+    }
+
+    toString() {
+        return `<struct ${this.def.name} @ 0x${this.address.toString(16)}>`;
+    }
 }
 
 // Helper classes for Python Runtime
@@ -657,6 +688,7 @@ function createStep(
     node: t.Node,
     nodeId: string
 ): ExecutionStep {
+    // console.log('CreateStep:', nodeId, 'Memory:', !!state.memory);
     return {
         stepIndex: state.steps.length,
         nodeId,
@@ -665,6 +697,30 @@ function createStep(
         variables: collectVariables(state.scope),
         callStack: [...state.callStack],
         isBreakpoint: state.breakpoints.includes(node.loc?.start.line || 0),
+        memory: state.memory ? {
+            heap: state.memory.getHeapState().map((b: any) => ({
+                address: b.address,
+                size: b.size,
+                value: b.data,
+                type: b.type,
+                isAllocated: !b.freed,
+                line: b.allocLine
+            })),
+            stack: state.memory.getStackState().flatMap((frame: any) =>
+                frame.variables.map((v: any) => {
+                    let val: any = '?';
+                    try {
+                        if (state.memory) val = state.memory.read(v.address);
+                    } catch (e) { /* ignore */ }
+                    return {
+                        name: v.name,
+                        value: val,
+                        address: v.address,
+                        type: v.type
+                    };
+                })
+            )
+        } : undefined,
     };
 }
 
@@ -706,7 +762,7 @@ function shouldIgnoreStep(statement: t.Statement): boolean {
 
 export function executeCode(
     code: string,
-    language: 'javascript' | 'python',
+    language: 'javascript' | 'python' | 'c',
     breakpoints: number[] = []
 ): ExecutionTrace {
 
@@ -715,6 +771,8 @@ export function executeCode(
     try {
         if (language === 'python') {
             ast = parsePythonCode(code);
+        } else if (language === 'c') {
+            ast = parseCCode(code);
         } else {
             ast = parser.parse(code, {
                 sourceType: 'module',
@@ -741,17 +799,45 @@ export function executeCode(
         breakpoints,
         functions: new Map(),
         classes: new Map(),
+        memory: undefined,
+        structDefs: new Map(),
     };
 
+    if (language === 'c') {
+        state.memory = new CMemory();
+    }
+
     // First pass: collect function and class declarations
-    ast.program.body.forEach(statement => {
+    const body = ast.program.body;
+    for (const statement of body) {
         if (t.isFunctionDeclaration(statement) && statement.id) {
             state.functions.set(statement.id.name, statement);
-        }
-        if (t.isClassDeclaration(statement) && statement.id) {
+        } else if (t.isClassDeclaration(statement) && statement.id) {
             state.classes.set(statement.id.name, statement);
+
+            // For C, also create CStructDef
+            if (language === 'c' && state.structDefs) {
+                const fields: Array<{ name: string, type: string }> = [];
+                // Check class body for fields
+                for (const member of statement.body.body) {
+                    if (t.isClassProperty(member) && t.isIdentifier(member.key)) {
+                        // Extract type from typeAnnotation if we hacked it in there
+                        let type = 'int'; // default
+                        if (member.typeAnnotation && t.isTSTypeAnnotation(member.typeAnnotation)) {
+                            const typeRef = member.typeAnnotation.typeAnnotation;
+                            // Check if it's a type reference with identifier (our hack)
+                            if (t.isTSTypeReference(typeRef) && t.isIdentifier(typeRef.typeName)) {
+                                type = typeRef.typeName.name;
+                            }
+                        }
+                        fields.push({ name: member.key.name, type });
+                    }
+                }
+                const structDef = new CStructDef(statement.id.name, fields);
+                state.structDefs.set(statement.id.name, structDef);
+            }
         }
-    });
+    }
 
     // Add built-in console.log
     const consoleObj = {
@@ -1043,6 +1129,105 @@ export function executeCode(
         });
     }
 
+    // C Runtime Support
+    if (language === 'c') {
+        const cRuntime = {
+            types: {
+                CInt,
+                CFloat,
+                CDouble,
+                CChar,
+                CArray,
+            },
+            functions: {
+                printf: (...args: any[]) => {
+                    if (args.length === 0) return 0;
+                    const format = String(args[0]);
+                    const result = printf(format, ...args.slice(1));
+                    state.output.push(result);
+                    return result.length;
+                },
+                puts: (str: any) => {
+                    const text = String(str);
+                    state.output.push(text);
+                    return text.length;
+                },
+                putchar: (c: any) => {
+                    const char = typeof c === 'number' ? String.fromCharCode(c) : String(c)[0];
+                    state.output.push(char);
+                    return char.charCodeAt(0);
+                },
+                getchar: () => {
+                    // Simulate reading a character (return newline for now)
+                    return '\n'.charCodeAt(0);
+                },
+                malloc: (size: number) => {
+                    if (state.memory) {
+                        return state.memory.malloc(size, state.steps.length);
+                    }
+                    return { __ptr: true, __size: size, __data: new Array(size).fill(0) };
+                },
+                free: (ptr: any) => {
+                    if (state.memory && typeof ptr === 'number') {
+                        state.memory.free(ptr, state.steps.length);
+                    }
+                },
+                sizeof: (type: any) => {
+                    // Check struct defs if available
+                    if (typeof type === 'string' && state.structDefs && state.structDefs.has(type)) {
+                        return state.structDefs.get(type)!.size;
+                    }
+                    if (type === 'int' || type === 'float') return 4;
+                    if (type === 'double' || type === 'long') return 8;
+                    if (type === 'char') return 1;
+                    if (type === 'short') return 2;
+                    if (typeof type === 'object' && type !== null) {
+                        return JSON.stringify(type).length;
+                    }
+                    // Struct string handling "struct Point"
+                    if (typeof type === 'string' && type.startsWith('struct ') && state.structDefs) {
+                        const name = type.replace('struct ', '').trim();
+                        if (state.structDefs.has(name)) {
+                            return state.structDefs.get(name)!.size;
+                        }
+                    }
+                    return 4;
+                },
+                abs: Math.abs,
+                sqrt: Math.sqrt,
+                pow: Math.pow,
+                sin: Math.sin,
+                cos: Math.cos,
+                tan: Math.tan,
+                log: Math.log,
+                exp: Math.exp,
+                floor: Math.floor,
+                ceil: Math.ceil,
+                round: Math.round,
+                exit: (code: number) => {
+                    throw new Error(`Program exited with code ${code}`);
+                },
+                atoi: (str: string) => parseInt(str, 10) || 0,
+                atof: (str: string) => parseFloat(str) || 0.0,
+                strlen: (str: string) => String(str).length,
+                strcmp: (s1: string, s2: string) => {
+                    if (s1 < s2) return -1;
+                    if (s1 > s2) return 1;
+                    return 0;
+                },
+            },
+            createType: createCType,
+            getDefaultValue: getDefaultValue,
+        };
+
+        declareVariable(state.scope, '__cRuntime', cRuntime);
+
+        // Expose C built-ins to global scope
+        Object.entries(cRuntime.functions).forEach(([name, func]) => {
+            declareVariable(state.scope, name, func);
+        });
+    }
+
     try {
         // Execute program
         ast.program.body.forEach(statement => {
@@ -1050,6 +1235,16 @@ export function executeCode(
                 evaluateStatement(statement, state, code);
             }
         });
+
+        // C-specific: Call main() if it exists
+        if (language === 'c') {
+            const mainFunc = state.functions.get('main');
+            if (mainFunc) {
+                // Create synthetic call expression: main()
+                const mainCall = t.callExpression(t.identifier('main'), []);
+                evaluateExpression(mainCall, state, code);
+            }
+        }
 
         return {
             steps: state.steps,
@@ -1839,6 +2034,173 @@ function evaluateExpression(
     }
 
     if (t.isCallExpression(expression)) {
+        // C Memory Intrinsics
+        if (state.memory && t.isIdentifier(expression.callee)) {
+            const name = expression.callee.name;
+
+            if (name === '__allocStruct') {
+                const arg0 = expression.arguments[0];
+                const typeName = t.isStringLiteral(arg0) ? arg0.value : '';
+                if (state.structDefs && state.structDefs.has(typeName)) {
+                    const def = state.structDefs.get(typeName)!;
+                    const addr = state.memory.malloc(def.size, state.steps.length, `struct ${typeName}`);
+                    return new CStructRef(addr, def, state.memory);
+                }
+            }
+
+            if (name === '__arrow') {
+                // __arrow(ptr, 'field')
+                const ptrVal = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const fieldName = (expression.arguments[1] as t.StringLiteral).value;
+
+                let address = 0;
+                let type = '';
+
+                if (typeof ptrVal === 'number') {
+                    address = ptrVal;
+                    type = state.memory.getType(address);
+                } else if (ptrVal instanceof CPointer) { // If we had CPointer class used at runtime
+                    address = ptrVal.address;
+                    type = ptrVal.type.replace('*', '').trim();
+                }
+
+                // Handle struct type
+                if (type.startsWith('struct ')) {
+                    const structName = type.replace('struct ', '').trim();
+                    if (state.structDefs && state.structDefs.has(structName)) {
+                        const def = state.structDefs.get(structName)!;
+                        const field = def.getField(fieldName);
+                        if (field) {
+                            const fieldAddr = address + field.offset;
+                            // Read value or return struct ref based on field type?
+                            // For visualization, we might want intermediate ref.
+                            // But usually we just read.
+                            return state.memory.read(fieldAddr);
+                        }
+                    }
+                }
+
+                // Fallback: search all structs for field (educational/loose mode)
+                if (state.structDefs) {
+                    for (const def of state.structDefs.values()) {
+                        if (def.hasField(fieldName)) {
+                            const field = def.getField(fieldName)!;
+                            // Heuristic: check if this plausible?
+                            // Just try it.
+                            const fieldAddr = address + field.offset;
+                            try {
+                                return state.memory.read(fieldAddr);
+                            } catch (e) {
+                                // continue searching
+                            }
+                        }
+                    }
+                }
+            }
+            if (name === '__assign_deref') {
+                const ptrVal = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const val = evaluateExpression(expression.arguments[1] as t.Expression, state, code);
+
+                let address = 0;
+                if (typeof ptrVal === 'number') {
+                    address = ptrVal;
+                } else if (ptrVal instanceof CPointer) {
+                    address = ptrVal.address;
+                }
+
+                if (address && state.memory) {
+                    // We don't have type info here easily unless we look it up or pass it.
+                    // CMemory.write might handle it if we pass value?
+                    // For now assume primitive write or use generic write.
+                    state.memory.write(address, val);
+                }
+                return val;
+            }
+
+            if (name === '__assign_arrow') {
+                const ptrVal = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                const fieldName = (expression.arguments[1] as t.StringLiteral).value;
+                const val = evaluateExpression(expression.arguments[2] as t.Expression, state, code);
+
+                let address = 0;
+                let type = '';
+
+                if (typeof ptrVal === 'number') {
+                    address = ptrVal;
+                    type = state.memory.getType(address);
+                } else if (ptrVal instanceof CPointer) {
+                    address = ptrVal.address;
+                    type = ptrVal.type.replace('*', '').trim();
+                }
+
+                if (type.startsWith('struct ')) {
+                    const structName = type.replace('struct ', '').trim();
+                    if (state.structDefs && state.structDefs.has(structName)) {
+                        const def = state.structDefs.get(structName)!;
+                        const field = def.getField(fieldName);
+                        if (field) {
+                            state.memory.write(address + field.offset, val);
+                            return val;
+                        }
+                    }
+                }
+                // Fallback
+                if (state.structDefs) {
+                    for (const def of state.structDefs.values()) {
+                        if (def.hasField(fieldName)) {
+                            const field = def.getField(fieldName)!;
+                            try {
+                                state.memory.write(address + field.offset, val);
+                                return val;
+                            } catch (e) { }
+                        }
+                    }
+                }
+                return val;
+            }
+
+            if (name === '__deref') {
+                const val = evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                if (typeof val === 'number') {
+                    return state.memory.read(val);
+                }
+                // Handle CPointer object if we use it
+                if (val instanceof CPointer) {
+                    return state.memory.read(val.address);
+                }
+            }
+
+            if (name === '__addr') {
+                // Not fully implemented yet as it requires lvalue resolution
+                return 0;
+            }
+
+            if (name === '__sizeof') {
+                const arg0 = expression.arguments[0];
+                if (t.isStringLiteral(arg0)) {
+                    const type = arg0.value;
+                    const primitives: Record<string, number> = { 'int': 4, 'float': 4, 'double': 8, 'char': 1, 'long': 8, 'short': 2 };
+                    if (primitives[type]) return primitives[type];
+
+                    // Struct string handling "struct Point"
+                    if (typeof type === 'string' && type.startsWith('struct ')) {
+                        const name = type.replace('struct ', '').trim();
+                        if (state.structDefs && state.structDefs.has(name)) {
+                            return state.structDefs.get(name)!.size;
+                        }
+                    }
+
+                    // Handle pointer types
+                    if (type.includes('*')) return 4;
+                }
+
+                // If expression passed, parse type from expression result?
+                // or return default
+                evaluateExpression(expression.arguments[0] as t.Expression, state, code);
+                return 4;
+            }
+        }
+
         const calleeNode = expression.callee;
 
         // Handle method call (obj.method())

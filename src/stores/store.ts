@@ -32,6 +32,25 @@ result = fibonacci(5)
 print("Result:", result)
 `;
 
+const DEFAULT_C_CODE = `// Welcome to CodeFlow! 🌊
+// Paste your C code here and click "Visualize"
+
+#include <stdio.h>
+
+int fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+int main() {
+    int result = fibonacci(5);
+    printf("Result: %d\\n", result);
+    return 0;
+}
+`;
+
 export const useStore = create<CodeFlowState>((set, get) => ({
     // === State ===
     code: DEFAULT_CODE,
@@ -51,16 +70,22 @@ export const useStore = create<CodeFlowState>((set, get) => ({
         set({ code, flowGraph: null, trace: null, currentStepIndex: -1, playbackState: 'idle' });
     },
 
-    setLanguage: (language: 'javascript' | 'python') => {
+    setLanguage: (language: 'javascript' | 'python' | 'c') => {
         const currentCode = get().code;
         const isDefaultJS = currentCode === DEFAULT_CODE;
         const isDefaultPy = currentCode === DEFAULT_PYTHON_CODE;
+        const isDefaultC = currentCode === DEFAULT_C_CODE;
+        const isDefault = isDefaultJS || isDefaultPy || isDefaultC || currentCode === '';
 
         let newCode = currentCode;
-        if (language === 'python' && (isDefaultJS || currentCode === '')) {
-            newCode = DEFAULT_PYTHON_CODE;
-        } else if (language === 'javascript' && (isDefaultPy || currentCode === '')) {
-            newCode = DEFAULT_CODE;
+        if (isDefault) {
+            if (language === 'python') {
+                newCode = DEFAULT_PYTHON_CODE;
+            } else if (language === 'c') {
+                newCode = DEFAULT_C_CODE;
+            } else {
+                newCode = DEFAULT_CODE;
+            }
         }
 
         set({

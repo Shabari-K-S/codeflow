@@ -1,0 +1,100 @@
+.memory-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+.memory-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1; /* Split available space */
+    min-height: 0;
+}
+
+.memory-header {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+
+.memory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1;
+}
+
+.memory-item {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.02);
+    font-family: 'Fira Code', monospace;
+    font-size: 12px;
+}
+
+.heap-item {
+    grid-template-columns: 80px 60px 1fr 50px;
+}
+
+.stack-item {
+    grid-template-columns: 80px 1fr 1fr;
+}
+
+.memory-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.memory-addr {
+    color: var(--color-text-muted);
+}
+
+.memory-size {
+    color: var(--color-accent-blue);
+}
+
+.memory-type {
+    color: var(--color-accent-green);
+}
+
+.memory-value {
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.memory-status {
+    text-align: right;
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.allocated {
+    background: rgba(var(--color-accent-green-rgb), 0.1);
+}
+
+.freed {
+    background: rgba(var(--color-accent-red-rgb), 0.1);
+    opacity: 0.6;
+}
+
+.empty-memory {
+    padding: 16px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-style: italic;
+    font-size: 13px;
+}

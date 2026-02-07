@@ -72,6 +72,24 @@ export interface ExecutionStep {
     output?: string;           // console.log output
     error?: string;            // Runtime error
     isBreakpoint?: boolean;
+    memory?: MemorySnapshot;
+}
+
+export interface MemorySnapshot {
+    heap: Array<{
+        address: number;
+        size: number;
+        value: any;
+        type: string;
+        isAllocated: boolean;
+        line?: number;
+    }>;
+    stack: Array<{
+        name: string;
+        value: any;
+        address: number;
+        type: string;
+    }>;
 }
 
 export interface ExecutionTrace {
@@ -91,7 +109,7 @@ export interface Breakpoint {
 
 export interface EditorState {
     code: string;
-    language: 'javascript' | 'python';
+    language: 'javascript' | 'python' | 'c';
     breakpoints: Breakpoint[];
     currentLine: number | null;
 }
@@ -110,7 +128,7 @@ export interface PlaybackSettings {
 export interface CodeFlowState {
     // Editor
     code: string;
-    language: 'javascript' | 'python';
+    language: 'javascript' | 'python' | 'c';
     breakpoints: Set<number>;
 
     // Parsing
@@ -125,7 +143,7 @@ export interface CodeFlowState {
 
     // Actions
     setCode: (code: string) => void;
-    setLanguage: (lang: 'javascript' | 'python') => void;
+    setLanguage: (lang: 'javascript' | 'python' | 'c') => void;
     toggleBreakpoint: (line: number) => void;
 
     visualize: () => void;

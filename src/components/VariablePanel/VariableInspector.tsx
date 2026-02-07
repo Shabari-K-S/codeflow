@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '../../stores/store';
 import { SplitPane } from '../SplitPane/SplitPane';
+import { MemoryPanel } from './MemoryPanel';
 import type { VariableValue } from '../../types';
 import './VariableInspector.css';
 
@@ -76,15 +77,16 @@ export function VariableInspector() {
         variables: true,
         callStack: true,
         console: true,
+        memory: true,
     });
 
     const toggleSection = (section: keyof typeof visibleSections) => {
         setVisibleSections(prev => ({ ...prev, [section]: !prev[section] }));
     };
 
-    const { variables, callStack, output } = useMemo(() => {
+    const { variables, callStack, output, memory } = useMemo(() => {
         if (!trace || currentStepIndex < 0 || currentStepIndex >= trace.steps.length) {
-            return { variables: [], callStack: [], output: [] };
+            return { variables: [], callStack: [], output: [], memory: undefined };
         }
 
         const step = trace.steps[currentStepIndex];
@@ -101,6 +103,7 @@ export function VariableInspector() {
             variables: varsWithChange.filter(v => v.name !== 'console'),
             callStack: step.callStack,
             output: trace.output.slice(0, currentStepIndex + 1),
+            memory: step.memory,
         };
     }, [trace, currentStepIndex]);
 
@@ -192,14 +195,30 @@ export function VariableInspector() {
         </div>
     );
 
+    const memorySection = memory ? (
+        <div className="inspector-panel inspector-panel--memory">
+            <div className="inspector-panel__header">
+                <span className="inspector-panel__icon">🧠</span>
+                <h3>Memory</h3>
+                <span className="inspector-panel__count">
+                    {memory.heap.filter(b => b.isAllocated).length} allocs
+                </span>
+            </div>
+            <div className="inspector-panel__content">
+                <MemoryPanel memory={memory} />
+            </div>
+        </div>
+    ) : null;
+
     // Filter visible sections for SplitPane
     const visiblePanes = [];
     if (visibleSections.variables) visiblePanes.push(variablesSection);
     if (visibleSections.callStack) visiblePanes.push(callStackSection);
+    if (visibleSections.memory && memorySection) visiblePanes.push(memorySection);
     if (visibleSections.console) visiblePanes.push(consoleSection);
 
     // Key for SplitPane to force re-render on child count change (optional but safer)
-    const splitPaneKey = `split-${visibleSections.variables}-${visibleSections.callStack}-${visibleSections.console}`;
+    const splitPaneKey = `split-${visibleSections.variables}-${visibleSections.callStack}-${visibleSections.console}-${visibleSections.memory}`;
 
     return (
         <div className="variable-inspector">
@@ -228,6 +247,15 @@ export function VariableInspector() {
                     >
                         💬
                     </button>
+                    {memory && (
+                        <button
+                            className={`toolbar-toggle ${visibleSections.memory ? 'active' : ''}`}
+                            onClick={() => toggleSection('memory')}
+                            title="Toggle Memory"
+                        >
+                            🧠
+                        </button>
+                    )}
                 </div>
             </div>
 

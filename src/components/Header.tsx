@@ -39,10 +39,10 @@ export function Header() {
                         onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
                     >
                         <span className="language-icon">
-                            {language === 'javascript' ? '🟨' : '🐍'}
+                            {language === 'javascript' ? '🟨' : language === 'python' ? '🐍' : '🔵'}
                         </span>
                         <span className="language-name">
-                            {language === 'javascript' ? 'JavaScript' : 'Python'}
+                            {language === 'javascript' ? 'JavaScript' : language === 'python' ? 'Python' : 'C'}
                         </span>
                         <span className={`dropdown-arrow ${isDropdownOpen ? 'open' : ''}`}>
                             ▼
@@ -70,6 +70,16 @@ export function Header() {
                             >
                                 <span className="language-icon">🐍</span>
                                 <span>Python</span>
+                            </button>
+                            <button
+                                className={`language-option ${language === 'c' ? 'active' : ''}`}
+                                onClick={() => {
+                                    setLanguage('c');
+                                    setIsDropdownOpen(false);
+                                }}
+                            >
+                                <span className="language-icon">🔵</span>
+                                <span>C</span>
                             </button>
                         </div>
                     )}

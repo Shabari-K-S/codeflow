@@ -33,6 +33,7 @@ Whether you are debugging complex logic, teaching algorithms, or simply explorin
 - **Multi-Language Support**:
   - **JavaScript/TypeScript**: Powered by a custom AST parser and interpreter.
   - **Python**: Powered by `filbert` for client-side Python execution.
+  - **C**: Powered by a custom memory simulator with support for pointers, structs, and `malloc`/`free`.
 - **Responsive Layout**: Resizable panels for the Editor, Flowchart, and Inspector tools.
 
 ## 🏗️ Technology Stack
