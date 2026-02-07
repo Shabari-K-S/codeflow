@@ -25,191 +25,7 @@ export interface FlowComponent {
     title: string;
 }
 
-// Simple BFS-based layout that assigns rows and spreads nodes horizontally
-export function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
-    if (nodes.length === 0) return [];
-
-
-    // Build outgoing edges map (excluding loop-back and recursive)
-    const outgoing = new Map<string, string[]>();
-    const incoming = new Map<string, string[]>();
-    nodes.forEach(n => {
-        outgoing.set(n.id, []);
-        incoming.set(n.id, []);
-    });
-
-    edges.forEach(e => {
-        if (e.type !== 'loop-back' && e.type !== 'recursive' && e.type !== 'call') {
-            outgoing.get(e.source)?.push(e.target);
-            incoming.get(e.target)?.push(e.source);
-        }
-    });
-
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-    // Robust Layout: Assign rows using Topological Sort (Kahn's Algorithm)
-    // This naturally handles cycles by breaking them when necessary
-    const nodeRows = new Map<string, number>();
-
-    // Copy incoming degrees for processing
-    const inDegrees = new Map<string, number>();
-    nodes.forEach(n => inDegrees.set(n.id, incoming.get(n.id)?.length || 0));
-
-    let queue = nodes.filter(n => (inDegrees.get(n.id) || 0) === 0);
-    let currentRow = 0;
-
-    // Safety limit to prevent infinite loops (should strictly not happen with this algo, but safe guard)
-    let processedCount = 0;
-    const totalNodes = nodes.length;
-
-    while (processedCount < totalNodes) {
-        if (queue.length === 0) {
-            // Cycle detected! 
-            // We have nodes left but no roots (all have incoming edges).
-            // Break a cycle: pick a node with lowest in-degree (heuristic) and force it processable
-            const remaining = nodes.filter(n => !nodeRows.has(n.id));
-            if (remaining.length === 0) break; // Should not happen if count logic is right
-
-            // Sort by lowest rank/degree heuristic
-            remaining.sort((a, b) => (inDegrees.get(a.id) || 0) - (inDegrees.get(b.id) || 0));
-
-            // Force process the first one (treat incoming edges as back-edges)
-            queue.push(remaining[0]);
-            // (We don't need to manually decrement parent degrees for the 'broken' edges because
-            // we are just forcing this node to be placed at the current level)
-        }
-
-        const nextQueue: FlowNode[] = [];
-
-        // Process current level
-        for (const node of queue) {
-            if (nodeRows.has(node.id)) continue; // Already processed
-
-            nodeRows.set(node.id, currentRow);
-            processedCount++;
-
-            const children = outgoing.get(node.id) || [];
-            children.forEach(childId => {
-                const currentDegree = inDegrees.get(childId) || 0;
-                inDegrees.set(childId, currentDegree - 1);
-
-                if (currentDegree - 1 === 0) {
-                    // Find node object
-                    const childNode = nodeMap.get(childId);
-                    if (childNode) nextQueue.push(childNode);
-                }
-            });
-        }
-
-        // Move to next row
-        queue = nextQueue;
-        currentRow++;
-    }
-
-    // --- X-Positioning using "Parent-Guided" heuristic ---
-
-    // Initial State: X=0 for everyone
-    const nodeX = new Map<string, number>();
-    nodes.forEach(n => nodeX.set(n.id, 0));
-
-    // Get max row index
-    let maxRow = 0;
-    nodeRows.forEach(r => maxRow = Math.max(maxRow, r));
-
-    // Process row by row
-    for (let r = 1; r <= maxRow; r++) {
-        const rowNodes = nodes.filter(n => nodeRows.get(n.id) === r);
-
-        // 1. Calculate Ideal X based on parents
-        const idealX = new Map<string, number>();
-
-        rowNodes.forEach(node => {
-            const parents = incoming.get(node.id) || [];
-            if (parents.length === 0) {
-                idealX.set(node.id, 0);
-                return;
-            }
-
-            let weightedSum = 0;
-            let weightTotal = 0;
-
-            parents.forEach(pid => {
-                const parentX = nodeX.get(pid) || 0;
-                // Find edge type
-                const edge = edges.find(e => e.source === pid && e.target === node.id);
-
-                if (edge?.type === 'false') {
-                    // False branches: Try to push right
-                    weightedSum += (parentX + NODE_WIDTH + HORIZONTAL_SPACING);
-                    weightTotal += 1;
-                } else if (edge?.type === 'true') {
-                    // True branches: Try to keep straight
-                    weightedSum += parentX;
-                    weightTotal += 2; // Stronger pull
-                } else {
-                    // Normal/other
-                    weightedSum += parentX;
-                    weightTotal += 1;
-                }
-            });
-
-            idealX.set(node.id, weightTotal > 0 ? weightedSum / weightTotal : 0);
-        });
-
-        // 2. Sort by Ideal X to determine relative order
-        rowNodes.sort((a, b) => (idealX.get(a.id) || 0) - (idealX.get(b.id) || 0));
-
-        // 3. Place nodes avoiding overlap
-        // We'll place them as close to Ideal X as possible while maintaining Min Distance
-        const minDistance = NODE_WIDTH + HORIZONTAL_SPACING;
-
-        // Simple sweep: Start from left-most ideal, ensure gap from previous
-        // This can be improved by a center-out sweep, but let's try strict left-to-right first
-        // actually, left-to-right from sort order is safest
-
-        for (let i = 0; i < rowNodes.length; i++) {
-            const node = rowNodes[i];
-            let x = idealX.get(node.id) || 0;
-
-            if (i > 0) {
-                const prevNode = rowNodes[i - 1];
-                const prevX = nodeX.get(prevNode.id)!;
-                const minX = prevX + minDistance;
-                if (x < minX) x = minX;
-            }
-            nodeX.set(node.id, x);
-        }
-
-        // 4. Center the entire row relative to 0?
-        // Or Center relative to parent group?
-        // If we just pushed everything right, the graph drifts right.
-        // Let's re-center the row based on the average X of the *parents* of this row?
-        // No, simpler: Center the row around 0 to keep the graph balanced.
-        if (rowNodes.length > 0) {
-            const currentMin = nodeX.get(rowNodes[0].id)!;
-            const currentMax = nodeX.get(rowNodes[rowNodes.length - 1].id)!;
-            const rowCenter = (currentMin + currentMax) / 2;
-            const shift = -rowCenter; // Shift so center becomes 0
-
-            rowNodes.forEach(n => {
-                nodeX.set(n.id, nodeX.get(n.id)! + shift);
-            });
-        }
-    }
-
-    // Convert to LayoutNode
-    return nodes.map(n => {
-        return {
-            ...n,
-            x: nodeX.get(n.id) || 0,
-            y: (nodeRows.get(n.id) || 0) * (NODE_HEIGHT + VERTICAL_SPACING),
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-            column: 0,
-            row: nodeRows.get(n.id) || 0
-        };
-    });
-}
+// (Duplicate dagre layout removed)
 
 
 // Remove passthrough nodes by redirecting edges around them
@@ -333,35 +149,103 @@ export function removeMergeNodes(nodes: FlowNode[], edges: FlowEdge[]): { nodes:
 }
 
 
-// Improved layout algorithm with component separation
+// Robust Layout: Internal Component Layout (Dagre)
+import dagre from 'dagre';
+
+export function layoutComponent(nodes: FlowNode[], edges: FlowEdge[]): LayoutNode[] {
+    if (nodes.length === 0) return [];
+
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({
+        rankdir: 'TB',
+        nodesep: 50,    // Reduced from 120
+        ranksep: 50,    // Reduced from 100
+        edgesep: 10,    // Reduced from 40
+        marginx: 20,
+        marginy: 20,
+        ranker: 'network-simplex'
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    // Add nodes
+    nodes.forEach(node => {
+        g.setNode(node.id, {
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            label: node.label
+        });
+    });
+
+    // Add edges
+    edges.forEach(edge => {
+        let weight = 1;
+        let minlen = 1;
+
+        if (edge.type === 'true') weight = 5;
+        if (edge.type === 'loop-back' || edge.type === 'recursive') {
+            weight = 0;
+            minlen = 2;
+        }
+
+        g.setEdge(edge.source, edge.target, {
+            weight,
+            minlen,
+            label: edge.type,
+            // Custom data to pass through Dagre
+            edgeObj: edge
+        });
+    });
+
+    dagre.layout(g);
+
+    // Update nodes with positions
+    // AND capture edge control points
+
+    // Edges with points need to be updated in the original array reference if possible, 
+    // or we return them? 
+    // The current signature returns LayoutNode[].
+    // Ideally we should return { nodes: LayoutNode[], edges: FlowEdge[] } or update edges in place.
+    // Since we pass `edges` object references, we can attach points to them.
+
+    edges.forEach(edge => {
+        const dagreEdge = g.edge(edge.source, edge.target);
+        if (dagreEdge && dagreEdge.points) {
+            // Attach points to the edge object (requires updating FlowEdge type or adding dynamic prop)
+            (edge as any).points = dagreEdge.points;
+        }
+    });
+
+    return nodes.map(n => {
+        const node = g.node(n.id);
+        return {
+            ...n,
+            x: node.x,
+            y: node.y,
+            width: node.width,
+            height: node.height,
+            column: 0,
+            row: 0
+        };
+    });
+}
+
+// Global Layout: Vertical Stacking of Components
 export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[]): FlowComponent[] {
     if (inputNodes.length === 0) return [];
 
-    // Remove merge nodes by redirecting edges around them
+    // Remove merge nodes
     const { nodes, edges } = removeMergeNodes(inputNodes, inputEdges);
 
-    // 1. Build adjacency for component detection
+    // 1. Group nodes into "Scopes" (ignoring calls)
     const neighbors = new Map<string, string[]>();
     nodes.forEach(n => neighbors.set(n.id, []));
     edges.forEach(e => {
-        // We include call edges here if we want them in the same component?
-        // Usually, separate functions should be separate components.
-        // So we IGNORE call edges for connectivity.
-        // Also ignore recursive edges to avoid grouping recursive functions with themselves if logic is weird
-        // AND importantly, ignore edges that point TO a function node, as that's likely a call or metadata connection
-        // We want function definitions to be ISOLATED roots.
-
-        // Find the target node type
-        const targetNode = nodes.find(n => n.id === e.target);
-        const isTargetFunction = targetNode?.type === 'function';
-
-        if (e.type !== 'call' && e.type !== 'recursive' && !isTargetFunction) {
+        if (e.type !== 'call' && e.type !== 'recursive') {
             neighbors.get(e.source)?.push(e.target);
             neighbors.get(e.target)?.push(e.source);
         }
     });
 
-    // 2. Find connected components
     const components: string[][] = [];
     const visited = new Set<string>();
 
@@ -374,7 +258,6 @@ export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[
             while (queue.length > 0) {
                 const current = queue.shift()!;
                 component.push(current);
-
                 neighbors.get(current)?.forEach(neighbor => {
                     if (!visited.has(neighbor)) {
                         visited.add(neighbor);
@@ -386,20 +269,21 @@ export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[
         }
     });
 
-    // 3. Layout each component independently and pack them HORIZONTALLY
+    // 2. Layout each component independently
     const flowComponents: FlowComponent[] = [];
 
-    // Sort components: 'Start' first, then by size
+    // Sort: Start Node containing component FIRST, then functions
     components.sort((a, b) => {
-        const aHasStart = a.some(id => nodes.find(n => n.id === id)?.type === 'start');
-        const bHasStart = b.some(id => nodes.find(n => n.id === id)?.type === 'start');
-        if (aHasStart) return -1;
-        if (bHasStart) return 1;
-        return b.length - a.length;
+        const aStart = a.some(id => nodes.find(n => n.id === id)?.type === 'start');
+        const bStart = b.some(id => nodes.find(n => n.id === id)?.type === 'start');
+        if (aStart) return -1;
+        if (bStart) return 1;
+        return 0;
     });
 
     let currentOffsetX = 0;
-    const padding = 120; // Increased spacing between components
+    // Dynamic padding: Reduced significanty
+    const padding = 100;
 
     components.forEach(componentIds => {
         const componentNodes = nodes.filter(n => componentIds.includes(n.id));
@@ -408,6 +292,7 @@ export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[
         const layout = layoutComponent(componentNodes, componentEdges);
         if (layout.length === 0) return;
 
+        // Calculate bounding box centered at 0,0 locally
         const minX = Math.min(...layout.map(n => n.x - n.width / 2));
         const maxX = Math.max(...layout.map(n => n.x + n.width / 2));
         const minY = Math.min(...layout.map(n => n.y - n.height / 2));
@@ -416,43 +301,38 @@ export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[
         const width = maxX - minX;
         const height = maxY - minY;
 
-        // Determine Title
-        let title = 'Sub-process';
-        const startNode = componentNodes.find(n => n.type === 'start');
-        if (startNode) {
-            title = 'Main Execution';
-        } else {
-            // Find root-ish node (0 in-degree roughly, or 'function' type)
-            const funcNode = componentNodes.find(n => n.type === 'function');
-            if (funcNode) {
-                // Formatting "function foo()" -> "Function: foo"
-                let name = funcNode.label.replace('function ', '').replace('()', '');
-                // Handle "class.method"
-                if (name.includes('.')) title = `Method: ${name}`;
-                else title = `Function: ${name}`;
-            }
-        }
-
-        // Center the component internally
+        // Center locally
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
 
-        // Adjust node positions to be relative to the component center
         layout.forEach(n => {
             n.x -= centerX;
             n.y -= centerY;
         });
 
-        // HORIZONTAL placement: Place components side-by-side
-        const compX = currentOffsetX + width / 2;
-        const compY = 0; // All components aligned at top
+        // Adjust edge points to match the center offset!
+        componentEdges.forEach(edge => {
+            if ((edge as any).points) {
+                (edge as any).points.forEach((p: any) => {
+                    p.x -= centerX;
+                    p.y -= centerY;
+                });
+            }
+        });
+
+        const title = determineTitle(componentNodes);
+
+        // Position Horizontally (Side-by-Side)
+        // All components positioned with top at Y=0
+        // Dynamic routing handles any relative position when dragged
+        const yOffset = height / 2;
 
         flowComponents.push({
             id: componentNodes[0].id,
             nodes: layout,
             edges: componentEdges,
-            x: compX,
-            y: compY,
+            x: currentOffsetX + width / 2,
+            y: yOffset,
             width,
             height,
             title
@@ -464,52 +344,117 @@ export function identifyComponents(inputNodes: FlowNode[], inputEdges: FlowEdge[
     return flowComponents;
 }
 
-// Generate smooth curved path - updated to accept offsets
+function determineTitle(nodes: FlowNode[]): string {
+    const startNode = nodes.find(n => n.type === 'start');
+    if (startNode) return 'Main Execution';
+
+    const funcNode = nodes.find(n => n.type === 'function');
+    if (funcNode) {
+        let name = funcNode.label.replace('function ', '').replace('()', '');
+        if (name.includes('.')) return `Method: ${name}`;
+        return `Function: ${name}`;
+    }
+    return 'Sub-process';
+}
+
+
+// Generate Edge Path
 export function generateEdgePath(
     source: LayoutNode,
     target: LayoutNode,
-    isLoopBack: boolean,
-    isRecursive: boolean = false
+    edgeType: string = 'normal',
+    maxX?: number,
+    offsetIndex: number = 0,
+    edgePoints?: { x: number, y: number }[] // NEW: Optional points from Dagre
 ): string {
-    const sourceX = source.x;
-    const sourceY = source.y + source.height / 2;
-    const targetX = target.x;
-    const targetY = target.y - target.height / 2;
 
-    if (isLoopBack) {
-        const offset = 60;
-        const controlX = Math.min(source.x, target.x) - offset;
-        return `M ${source.x - source.width / 2} ${source.y}
-            Q ${controlX} ${source.y},
-              ${controlX} ${(source.y + target.y) / 2}
-            Q ${controlX} ${target.y},
-              ${target.x - target.width / 2} ${target.y}`;
+    // --- CASE 0: Internal Edges using Dagre Points ---
+    // If points are provided, use them directly for a smooth, natural flow
+    if (edgePoints && edgePoints.length > 0) {
+        // Dagre points include start, bends, and end.
+        // We can use a Basis Curve or Monotone X/Y to make it smooth.
+        // Or simple linear segments with L.
+
+        // Construct path: M start L p1 L p2 ... L end
+        // Or better: M start C ...
+        // Let's us basic linear for now, or simple curve interpolation if needed.
+        // Dagre's points are usually the "bends".
+
+        let path = `M ${edgePoints[0].x} ${edgePoints[0].y}`;
+
+        if (edgePoints.length === 2) {
+            // Straight line
+            path += ` L ${edgePoints[1].x} ${edgePoints[1].y}`;
+        } else {
+            // Multi-segment: use Curve Basis for smoothness?
+            // Or just lines. Dagre's ortho routing gives "Taxicab" like points.
+            for (let i = 1; i < edgePoints.length; i++) {
+                path += ` L ${edgePoints[i].x} ${edgePoints[i].y}`;
+            }
+        }
+        return path;
     }
 
-    // Recursive call - curve to the right side and loop back up
-    if (isRecursive) {
-        const offset = 80;
-        const controlX = Math.max(source.x, target.x) + source.width / 2 + offset;
-        return `M ${source.x + source.width / 2} ${source.y}
-            Q ${controlX} ${source.y},
-              ${controlX} ${(source.y + target.y) / 2}
-            Q ${controlX} ${target.y},
-              ${target.x + target.width / 2} ${target.y}`;
+
+    // --- CASE 1: CALL EDGES (Smooth Bezier) ---
+    // User requested "professional" curve for long jumps
+    const isCall = edgeType === 'call';
+    if (isCall) {
+        const sourceBottom = { x: source.x, y: source.y + source.height / 2 };
+        const targetTop = { x: target.x, y: target.y - target.height / 2 };
+
+        const dy = targetTop.y - sourceBottom.y;
+        const dx = targetTop.x - sourceBottom.x;
+
+        // Control Points for Cubic Bezier
+        // Curve out downwards, then curve in downwards
+        // Handles both forward and backward calls gracefully
+
+        const controlYOffset = Math.max(Math.abs(dy) * 0.5, 100);
+
+        const cp1 = { x: sourceBottom.x, y: sourceBottom.y + controlYOffset };
+        const cp2 = { x: targetTop.x, y: targetTop.y - controlYOffset };
+
+        // If backward call (target above), push controls further out to loop around?
+        // Or just S-curve.
+
+        return `M ${sourceBottom.x} ${sourceBottom.y} 
+                C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${targetTop.x} ${targetTop.y}`;
     }
 
-    // Smoother Bezier Curves
-    if (Math.abs(sourceX - targetX) < 5) {
-        return `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
+    // --- FALLBACK: Standard / Manual Routing ---
+    // (Used if no points provided, e.g. cross-component edges without points)
+
+    return generateEdgePathLegacy(source, target, edgeType, maxX, offsetIndex);
+}
+
+// Rename the old function to keep as fallback
+function generateEdgePathLegacy(
+    source: LayoutNode,
+    target: LayoutNode,
+    edgeType: string = 'normal',
+    maxX?: number,
+    offsetIndex: number = 0
+): string {
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const sourceBottom = { x: source.x, y: source.y + source.height / 2 };
+    const targetTop = { x: target.x, y: target.y - target.height / 2 };
+
+    // Quick straight line for simple cases
+    if (Math.abs(dx) < 2) {
+        return `M ${sourceBottom.x} ${sourceBottom.y} L ${targetTop.x} ${targetTop.y}`;
     }
 
-    const midY = (sourceY + targetY) / 2;
+    // Standard Z-Shape
+    const r = 12;
+    const midY = (source.y + source.height / 2 + target.y - target.height / 2) / 2;
+    const signX = target.x > source.x ? 1 : -1;
 
-    // Add logic to avoid overlapping vertical lines
-    // If it's a straight drop, use a slight curve? No, straight is fine.
-
-    // For non-straight, use Cubic Bezier with better control points
-    return `M ${sourceX} ${sourceY}
-          C ${sourceX} ${midY},
-            ${targetX} ${midY},
-            ${targetX} ${targetY}`;
+    return `M ${sourceBottom.x} ${sourceBottom.y}
+            L ${sourceBottom.x} ${midY - r}
+            Q ${sourceBottom.x} ${midY}, ${sourceBottom.x + r * signX} ${midY}
+            L ${targetTop.x - r * signX} ${midY}
+            Q ${targetTop.x} ${midY}, ${targetTop.x} ${midY + r}
+            L ${targetTop.x} ${targetTop.y}`;
 }

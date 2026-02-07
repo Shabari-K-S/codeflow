@@ -8,23 +8,26 @@ import { identifyComponents, generateEdgePath } from '../../core/visualizer/layo
 
 
 
-function getNodeGradient(type: string): [string, string] {
-    switch (type) {
-        case 'start': return ['#4ade80', '#22c55e']; // Bright Green
-        case 'end': return ['#f87171', '#ef4444']; // Red
-        case 'decision': return ['#fbbf24', '#d97706']; // Amber
-        case 'loop': return ['#60a5fa', '#2563eb']; // Blue
-        case 'function': return ['#c084fc', '#9333ea']; // Purple
-        case 'call': return ['#f472b6', '#db2777']; // Pink
-        case 'return': return ['#fb923c', '#ea580c']; // Orange
-        default: return ['#94a3b8', '#475569']; // Slate
-    }
+const NODE_COLORS: Record<string, string> = {
+    start: '#4ade80',  // Neon Green
+    end: '#f87171',    // Neon Red
+    decision: '#fbbf24', // Neon Amber
+    loop: '#fbbf24',   // Neon Amber
+    function: '#c084fc', // Neon Purple
+    call: '#60a5fa',   // Neon Blue
+    return: '#f472b6', // Neon Pink
+    process: '#94a3b8', // Slate/White
+    default: '#94a3b8'
+};
+
+function getNodeColor(type: string): string {
+    return NODE_COLORS[type] || NODE_COLORS.default;
 }
 
 function getNodeIcon(type: string): string {
     switch (type) {
         case 'start': return '▶';
-        case 'end': return '⬛';
+        case 'end': return '■';
         case 'decision': return '◇';
         case 'loop': return '↻';
         case 'function': return 'ƒ';
@@ -58,14 +61,17 @@ export function FlowChart() {
         return identifyComponents(flowGraph.nodes, flowGraph.edges);
     }, [flowGraph]);
 
-    // Initialize positions when components change
+    // Initialize and Update positions when components change
+    // We intentionally overwrite positions on component update to reflect layout algorithm changes.
+    // Dragging state is preserved via `positions` only while components remain same reference,
+    // but here we want new layout to take precedence if the graph structure/layout changes.
     useEffect(() => {
         setPositions(prev => {
             const newPositions = { ...prev };
             components.forEach(comp => {
-                if (!newPositions[comp.id]) {
-                    newPositions[comp.id] = { x: comp.x, y: comp.y };
-                }
+                // Always update position to match the layout engine's latest calculation
+                // This ensures that when we switch layouts (e.g. to vertical stack), the UI updates.
+                newPositions[comp.id] = { x: comp.x, y: comp.y };
             });
             return newPositions;
         });
@@ -203,60 +209,197 @@ export function FlowChart() {
                 style={{ width: '100%', height: '100%' }}
             >
                 <defs>
-                    {['start', 'end', 'decision', 'loop', 'function', 'call', 'return', 'process'].map(type => {
-                        const [color1, color2] = getNodeGradient(type);
-                        return (
-                            <linearGradient key={type} id={`gradient-${type}`} x1="0%" y1="0%" x2="0%" y2="100%">
-                                <stop offset="0%" stopColor={color1} />
-                                <stop offset="100%" stopColor={color2} />
-                            </linearGradient>
-                        );
-                    })}
-
-                    <linearGradient id="gradient-active" x1="0%" y1="0%" x2="0%" y2="100%">
-                        <stop offset="0%" stopColor="#60a5fa" />
-                        <stop offset="100%" stopColor="#3b82f6" />
-                    </linearGradient>
-
-                    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-                        <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#64748b" />
+                    {/* Standard Markers */}
+                    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
                     </marker>
-                    <marker id="arrow-active" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-                        <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#3b82f6" />
-                    </marker>
-                    <marker id="arrow-true" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-                        <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#22c55e" />
-                    </marker>
-                    <marker id="arrow-false" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-                        <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#ef4444" />
-                    </marker>
-                    <marker id="arrow-recursive" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-                        <path d="M0,0 L12,6 L0,12 L3,6 Z" fill="#f97316" />
+                    <marker id="arrow-active" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#38bdf8" />
                     </marker>
 
-                    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-                        <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.5" floodColor="#000" result="shadow" />
-                    </filter>
-                    <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="6" result="blur" />
-                        <feFlood floodColor="#60a5fa" floodOpacity="0.8" result="color" />
-                        <feComposite in="color" in2="blur" operator="in" result="shadow" />
+                    {/* Condition Markers */}
+                    <marker id="arrow-true" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#4ade80" />
+                    </marker>
+                    <marker id="arrow-false" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#f87171" />
+                    </marker>
+                    <marker id="arrow-recursive" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#fb923c" />
+                    </marker>
+                    <marker id="arrow-call" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#c084fc" />
+                    </marker>
+
+                    <filter id="neon-glow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />
                         <feMerge>
-                            <feMergeNode in="shadow" />
+                            <feMergeNode in="coloredBlur" />
                             <feMergeNode in="SourceGraphic" />
                         </feMerge>
                     </filter>
-                    <filter id="selected-glow" x="-50%" y="-50%" width="200%" height="200%">
-                        <feDropShadow dx="0" dy="0" stdDeviation="8" floodColor="#c084fc" floodOpacity="0.6" />
-                    </filter>
+
+                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                        <circle cx="2" cy="2" r="1" fill="rgba(56, 189, 248, 0.15)" />
+                    </pattern>
                 </defs>
 
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                    <circle cx="20" cy="20" r="1" fill="#334155" opacity="0.3" />
-                </pattern>
                 <rect x="-50000" y="-50000" width="100000" height="100000" fill="url(#grid)" />
 
                 <g ref={zoomGroupRef}>
+
+                    {/* GLOBAL EDGES (Cross-component connections) */}
+                    {flowGraph && (() => {
+                        // 1. Identify Global Edges
+                        const localEdgeIds = new Set<string>();
+                        components.forEach(c => c.edges.forEach(e => localEdgeIds.add(e.id)));
+                        const globalEdges = flowGraph.edges.filter(e => !localEdgeIds.has(e.id));
+
+                        // 2. Helper to find node absolute position
+                        const getNodeAbsPos = (nodeId: string) => {
+                            for (const comp of components) {
+                                const node = comp.nodes.find(n => n.id === nodeId);
+                                if (node) {
+                                    const compPos = positions[comp.id] || { x: comp.x, y: comp.y };
+                                    return {
+                                        x: compPos.x + node.x,
+                                        y: compPos.y + node.y,
+                                        width: node.width,
+                                        height: node.height,
+                                        node,
+                                        comp
+                                    };
+                                }
+                            }
+                            return null;
+                        };
+
+                        // 3. Helper to find function ENTRY node for call edges
+                        // This ensures call arrows connect to the top function node, not arbitrary internal node
+                        const getFunctionEntryNode = (nodeId: string) => {
+                            for (const comp of components) {
+                                const hasNode = comp.nodes.find(n => n.id === nodeId);
+                                if (hasNode) {
+                                    // Find function entry: type='function' or topmost node
+                                    const funcEntry = comp.nodes.find(n => n.type === 'function');
+                                    if (funcEntry) {
+                                        const compPos = positions[comp.id] || { x: comp.x, y: comp.y };
+                                        return {
+                                            x: compPos.x + funcEntry.x,
+                                            y: compPos.y + funcEntry.y,
+                                            width: funcEntry.width,
+                                            height: funcEntry.height,
+                                            node: funcEntry,
+                                            comp
+                                        };
+                                    }
+                                    // Fallback: topmost node in component
+                                    const topmostNode = comp.nodes.reduce((top, n) =>
+                                        n.y < top.y ? n : top, comp.nodes[0]);
+                                    const compPos = positions[comp.id] || { x: comp.x, y: comp.y };
+                                    return {
+                                        x: compPos.x + topmostNode.x,
+                                        y: compPos.y + topmostNode.y,
+                                        width: topmostNode.width,
+                                        height: topmostNode.height,
+                                        node: topmostNode,
+                                        comp
+                                    };
+                                }
+                            }
+                            return null;
+                        };
+
+                        return globalEdges.map((edge, index) => {
+                            const sourceInfo = getNodeAbsPos(edge.source);
+                            // For call edges, target the function entry node for cleaner connection
+                            const targetInfo = edge.type === 'call'
+                                ? getFunctionEntryNode(edge.target)
+                                : getNodeAbsPos(edge.target);
+
+                            if (!sourceInfo || !targetInfo) return null;
+
+                            // Create wrapper objects that mimic Node layout for generateEdgePath
+                            // ensuring we pass the absolute coordinates
+                            const sourceLayout = { ...sourceInfo.node, x: sourceInfo.x, y: sourceInfo.y };
+                            const targetLayout = { ...targetInfo.node, x: targetInfo.x, y: targetInfo.y };
+
+                            const path = generateEdgePath(sourceLayout, targetLayout, edge.type, undefined, index);
+
+                            // Style for Global Edges (usually Calls)
+                            const isCall = edge.type === 'call';
+                            const strokeColor = isCall ? '#c084fc' : '#94a3b8';
+                            const markerEnd = isCall ? 'url(#arrow-call)' : 'url(#arrow)';
+                            const strokeDash = isCall ? '6 4' : '4 4';
+
+                            // Label Position - Place on the ACTUAL path, not geometric center
+                            // For calls, path goes: source.bottom -> down -> horizontal -> down -> target.top
+                            // Put label on the horizontal segment
+                            let labelX: number;
+                            let labelY: number;
+
+                            if (isCall) {
+                                // Horizontal segment is between source and target X
+                                // Y is at the level where the path goes horizontal (just below source exit)
+                                const sourceBottom = sourceLayout.y + sourceLayout.height / 2;
+                                labelX = sourceLayout.x + 40; // Slightly right of source for better visibility
+                                labelY = sourceBottom + 30; // Just below source exit point
+                            } else {
+                                // Default: midpoint
+                                labelX = (sourceLayout.x + targetLayout.x) / 2;
+                                labelY = (sourceLayout.y + targetLayout.y) / 2;
+                            }
+
+                            return (
+                                <g key={edge.id} className="global-edge">
+                                    <path
+                                        d={path}
+                                        fill="none"
+                                        stroke="#0f172a"
+                                        strokeWidth={6}
+                                        opacity={0.8}
+                                    />
+                                    <motion.path
+                                        d={path}
+                                        fill="none"
+                                        stroke={strokeColor}
+                                        strokeWidth={2}
+                                        strokeDasharray={strokeDash}
+                                        strokeLinecap="round"
+                                        markerEnd={markerEnd}
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        transition={{ duration: 0.5 }}
+                                    />
+                                    {edge.label && (
+                                        <g transform={`translate(${labelX}, ${labelY})`}>
+                                            <rect
+                                                x="-24"
+                                                y="-10"
+                                                width="48"
+                                                height="20"
+                                                rx="6"
+                                                fill="#1e293b"
+                                                stroke={strokeColor}
+                                                strokeWidth="1"
+                                                filter="url(#neon-glow)"
+                                            />
+                                            <text
+                                                textAnchor="middle"
+                                                dominantBaseline="middle"
+                                                fill={strokeColor}
+                                                fontSize="10"
+                                                fontWeight="600"
+                                                fontFamily="'JetBrains Mono', monospace"
+                                            >
+                                                {edge.label}
+                                            </text>
+                                        </g>
+                                    )}
+                                </g>
+                            );
+                        });
+                    })()}
 
                     {components.map(comp => {
                         const pos = positions[comp.id] || { x: comp.x, y: comp.y };
@@ -266,8 +409,6 @@ export function FlowChart() {
                         const padding = 40;
                         const boxWidth = comp.width + padding * 2;
                         const boxHeight = comp.height + padding * 2;
-                        const boxX = -boxWidth / 2;
-                        const boxY = -boxHeight / 2;
 
                         return (
                             <g
@@ -281,52 +422,37 @@ export function FlowChart() {
                                     setSelectedComponentId(comp.id);
                                 }}
                             >
-                                {/* Component Container Label */}
-                                <text
-                                    x={boxX}
-                                    y={boxY - 15}
-                                    fill="#94a3b8"
-                                    fontSize="14"
-                                    fontWeight="600"
-                                    fontFamily="monospace"
-                                    letterSpacing="1px"
-                                >
-                                    {comp.title.toUpperCase()}
-                                </text>
-
-                                {/* Component Container Box */}
+                                {/* Component Boundary (Dashed Neon Box) */}
                                 <rect
-                                    x={boxX}
-                                    y={boxY}
+                                    x={-boxWidth / 2}
+                                    y={-boxHeight / 2}
                                     width={boxWidth}
                                     height={boxHeight}
-                                    fill="none"
-                                    stroke="#334155"
-                                    strokeWidth="1"
-                                    strokeDasharray="4,4"
-                                    rx="16"
-                                    pointerEvents="all" // Allow clicking on empty space to drag
-                                    opacity="0.5"
+                                    fill="rgba(15, 23, 42, 0.4)"
+                                    stroke={isSelected ? '#38bdf8' : '#334155'}
+                                    strokeWidth={isSelected ? 2 : 1}
+                                    strokeDasharray="8 6"
+                                    rx="12"
+                                    opacity="0.8"
                                 />
-
-                                {/* Selection Highlight Box (Overlays the container) */}
                                 {isSelected && (
                                     <rect
-                                        x={boxX - 5}
-                                        y={boxY - 5}
-                                        width={boxWidth + 10}
-                                        height={boxHeight + 10}
+                                        x={-boxWidth / 2}
+                                        y={-boxHeight / 2}
+                                        width={boxWidth}
+                                        height={boxHeight}
                                         fill="none"
-                                        stroke="#3b82f6"
-                                        strokeWidth="2"
-                                        rx="20"
-                                        pointerEvents="none"
+                                        stroke="#38bdf8"
+                                        strokeWidth="1"
+                                        strokeOpacity="0.3"
+                                        rx="12"
+                                        filter="url(#neon-glow)"
                                     />
                                 )}
 
                                 {/* Edges */}
                                 <g className="edges">
-                                    {comp.edges.map(edge => {
+                                    {comp.edges.map((edge, index) => {
                                         const source = comp.nodes.find(n => n.id === edge.source);
                                         const target = comp.nodes.find(n => n.id === edge.target);
 
@@ -334,57 +460,132 @@ export function FlowChart() {
 
                                         const isLoopBack = edge.type === 'loop-back';
                                         const isRecursive = edge.type === 'recursive';
-                                        const path = generateEdgePath(source, target, isLoopBack, isRecursive);
+
+                                        // Pass index for dynamic call routing offset
+                                        // Pass edge points from Dagre layout (if available) for natural routing
+                                        const edgePoints = (edge as any).points; // Layout engine attached points
+
+                                        const path = generateEdgePath(
+                                            source,
+                                            target,
+                                            edge.type,
+                                            comp.width / 2,
+                                            index,
+                                            edgePoints // NEW: Pass points
+                                        );
                                         const isActive = source.lineNumber === currentLine || target.lineNumber === currentLine;
 
-                                        let strokeColor = '#64748b';
+                                        // Default styles
+                                        let strokeColor = '#475569';
                                         let markerEnd = 'url(#arrow)';
+                                        let strokeDash = '4 4';
 
-                                        if (edge.type === 'true') {
-                                            strokeColor = '#22c55e';
+                                        // Conditional styles based on edge type
+                                        if (isActive) {
+                                            strokeColor = '#38bdf8'; // Active Neon Blue
+                                            markerEnd = 'url(#arrow-active)';
+                                        } else if (edge.type === 'true') {
+                                            strokeColor = '#4ade80'; // Neon Green
                                             markerEnd = 'url(#arrow-true)';
                                         } else if (edge.type === 'false') {
-                                            strokeColor = '#ef4444';
+                                            strokeColor = '#f87171'; // Neon Red
                                             markerEnd = 'url(#arrow-false)';
                                         } else if (edge.type === 'recursive') {
-                                            strokeColor = '#f97316'; // Orange for recursive calls
+                                            strokeColor = '#fb923c'; // Neon Orange
                                             markerEnd = 'url(#arrow-recursive)';
                                         } else if (edge.type === 'call') {
-                                            strokeColor = '#a855f7'; // Purple for regular calls
-                                        } else if (isActive) {
-                                            strokeColor = '#3b82f6';
-                                            markerEnd = 'url(#arrow-active)';
+                                            strokeColor = '#c084fc'; // Neon Purple
+                                            markerEnd = 'url(#arrow-call)';
+                                            strokeDash = '6 4';
                                         }
 
-                                        const labelX = (source.x + target.x) / 2 + (isLoopBack ? -40 : isRecursive ? 100 : 15);
-                                        const labelY = (source.y + target.y) / 2 + 5;
+                                        // Refined Label Positioning (Geometry-Aware)
+                                        let labelX = (source.x + target.x) / 2;
+                                        let labelY = (source.y + target.y) / 2;
+
+                                        const isVertical = Math.abs(source.x - target.x) < 20;
+
+                                        if (edge.type === 'true') {
+                                            // True Branch
+                                            if (isVertical) {
+                                                // Vertical Flow (e.g. Function Body or straight through)
+                                                // Place label slightly below source to signify start of block
+                                                labelX = source.x + 20;
+                                                labelY = source.y + source.height / 2 + 30;
+                                            } else {
+                                                // Branching Left
+                                                // Path goes Left then Down.
+                                                // Push further left to avoid overlap
+                                                labelX = source.x - source.width / 2 - 40;
+                                                labelY = source.y - 5;
+                                            }
+                                        } else if (edge.type === 'false') {
+                                            // False Branch
+                                            if (isVertical) {
+                                                // Vertical Flow (unlikely for False, but possible)
+                                                labelX = source.x + 20;
+                                                labelY = source.y + source.height / 2 + 30;
+                                            } else {
+                                                // Branching Right
+                                                // Push further right to avoid overlap
+                                                labelX = source.x + source.width / 2 + 40;
+                                                labelY = source.y - 5;
+                                            }
+                                        } else if (isLoopBack || isRecursive) {
+                                            // On the vertical return segment (far right)
+                                            labelX = (comp.width / 2) + 50;
+                                            // Y is midpoint of loop height
+                                            labelY = (source.y + target.y) / 2;
+                                        } else {
+                                            // Normal
+                                            labelX = (source.x + target.x) / 2 + 10;
+                                        }
 
                                         return (
                                             <g key={edge.id}>
+                                                {/* Background path for hit detection/visibility */}
                                                 <path
                                                     d={path}
                                                     fill="none"
-                                                    stroke="black"
-                                                    strokeWidth={3}
-                                                    opacity={0.1}
-                                                    transform="translate(1, 2)"
+                                                    stroke="#0f172a"
+                                                    strokeWidth={6}
+                                                    opacity={0.8}
                                                 />
                                                 <motion.path
                                                     d={path}
                                                     fill="none"
                                                     stroke={strokeColor}
-                                                    strokeWidth={isActive ? 3 : 2}
-                                                    strokeDasharray={edge.type === 'call' ? '5,5' : 'none'}
+                                                    strokeWidth={isActive ? 2.5 : 2}
+                                                    strokeDasharray={strokeDash}
                                                     strokeLinecap="round"
                                                     markerEnd={markerEnd}
-                                                    initial={{ pathLength: 0, opacity: 0 }}
-                                                    animate={{ pathLength: 1, opacity: 1 }}
-                                                    transition={{ duration: 0.5, delay: 0.1 }}
+                                                    initial={{ strokeDashoffset: 0 }}
+                                                    animate={isActive ? { strokeDashoffset: -20 } : { strokeDashoffset: 0 }}
+                                                    transition={isActive ? { duration: 1, repeat: Infinity, ease: 'linear' } : {}}
                                                 />
                                                 {edge.label && (
                                                     <g transform={`translate(${labelX}, ${labelY})`}>
-                                                        <rect x="-20" y="-10" width="40" height="18" rx="9" fill={edge.type === 'true' ? '#166534' : edge.type === 'false' ? '#991b1b' : '#1e293b'} />
-                                                        <text textAnchor="middle" dominantBaseline="middle" fill="white" fontSize="10" fontWeight="600">{edge.label}</text>
+                                                        <rect
+                                                            x="-24"
+                                                            y="-10"
+                                                            width="48"
+                                                            height="20"
+                                                            rx="6"
+                                                            fill="#1e293b"
+                                                            stroke={strokeColor}
+                                                            strokeWidth="1"
+                                                            filter="url(#neon-glow)"
+                                                        />
+                                                        <text
+                                                            textAnchor="middle"
+                                                            dominantBaseline="middle"
+                                                            fill={strokeColor}
+                                                            fontSize="10"
+                                                            fontWeight="600"
+                                                            fontFamily="'JetBrains Mono', monospace"
+                                                        >
+                                                            {edge.label}
+                                                        </text>
                                                     </g>
                                                 )}
                                             </g>
@@ -392,45 +593,96 @@ export function FlowChart() {
                                     })}
                                 </g>
 
-                                {/* Nodes */}
+                                {/* Nodes (Metoro Cards) */}
                                 <g className="nodes">
                                     <AnimatePresence>
-                                        {comp.nodes.map((node, index) => {
-                                            // Highlight End node when playback is finished, otherwise highlight by current line
+                                        {comp.nodes.map((node) => {
                                             const isEndNodeActive = isFinished && node.type === 'end';
                                             const isLineActive = node.lineNumber === currentLine && node.lineNumber > 0;
                                             const isActive = isEndNodeActive || isLineActive;
-                                            const gradientId = isActive ? 'gradient-active' : `gradient-${node.type}`;
+                                            const color = getNodeColor(node.type);
                                             const icon = getNodeIcon(node.type);
-                                            const isOval = node.type === 'start' || node.type === 'end';
-                                            const isDiamond = node.type === 'decision' || node.type === 'loop';
 
                                             return (
                                                 <motion.g
                                                     key={node.id}
-                                                    initial={{ opacity: 0, scale: 0.8 }}
+                                                    initial={{ opacity: 0, scale: 0.9 }}
                                                     animate={{ opacity: 1, scale: 1 }}
-                                                    exit={{ opacity: 0, scale: 0.8 }}
-                                                    transition={{ duration: 0.3, delay: index * 0.03 }}
-                                                    filter={isActive ? 'url(#glow-active)' : 'url(#shadow)'}
+                                                    exit={{ opacity: 0, scale: 0.9 }}
+                                                    transition={{ duration: 0.3 }}
                                                 >
-                                                    {isOval ? (
-                                                        <ellipse cx={node.x} cy={node.y} rx={node.width / 2} ry={node.height / 2} fill={`url(#${gradientId})`} stroke={isActive ? '#93c5fd' : 'rgba(255,255,255,0.1)'} strokeWidth={isActive ? 3 : 1} />
-                                                    ) : isDiamond ? (
-                                                        <polygon points={`${node.x} ${node.y - node.height / 2 - 5}, ${node.x + node.width / 2 + 10} ${node.y}, ${node.x} ${node.y + node.height / 2 + 5}, ${node.x - node.width / 2 - 10} ${node.y}`} fill={`url(#${gradientId})`} stroke={isActive ? '#93c5fd' : 'rgba(255,255,255,0.1)'} strokeWidth={isActive ? 3 : 1} />
-                                                    ) : (
-                                                        <rect x={node.x - node.width / 2} y={node.y - node.height / 2} width={node.width} height={node.height} rx={12} fill={`url(#${gradientId})`} stroke={isActive ? '#93c5fd' : 'rgba(255,255,255,0.1)'} strokeWidth={isActive ? 3 : 1} />
-                                                    )}
-                                                    <text x={node.x - node.width / 2 + 18} y={node.y + 1} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.8)" fontSize="14">{icon}</text>
-                                                    <text x={node.x + 8} y={node.y} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize="12" fontFamily="'JetBrains Mono', monospace" fontWeight="500">{node.label.length > 16 ? node.label.slice(0, 14) + '…' : node.label}</text>
+                                                    {/* Card Body */}
+                                                    <rect
+                                                        x={node.x - node.width / 2}
+                                                        y={node.y - node.height / 2}
+                                                        width={node.width}
+                                                        height={node.height}
+                                                        rx="6"
+                                                        fill="#1e293b" // Dark Slate
+                                                        stroke={isActive ? color : '#334155'}
+                                                        strokeWidth={isActive ? 2 : 1}
+                                                        filter={isActive ? 'url(#neon-glow)' : undefined}
+                                                    />
+
+                                                    {/* Accent Bar (Left side) */}
+                                                    <path
+                                                        d={`M ${node.x - node.width / 2} ${node.y - node.height / 2 + 6} 
+                                                           L ${node.x - node.width / 2} ${node.y + node.height / 2 - 6}`}
+                                                        stroke={color}
+                                                        strokeWidth="3"
+                                                        strokeLinecap="round"
+                                                        transform="translate(4, 0)"
+                                                    />
+
+                                                    {/* Icon */}
+                                                    <text
+                                                        x={node.x - node.width / 2 + 20}
+                                                        y={node.y + 1}
+                                                        textAnchor="middle"
+                                                        dominantBaseline="middle"
+                                                        fill={color}
+                                                        fontSize="12"
+                                                        fontWeight="bold"
+                                                    >
+                                                        {icon}
+                                                    </text>
+
+                                                    {/* Label */}
+                                                    <text
+                                                        x={node.x + 10}
+                                                        y={node.y}
+                                                        textAnchor="middle"
+                                                        dominantBaseline="middle"
+                                                        fill="#f1f5f9"
+                                                        fontSize="11"
+                                                        fontFamily="'JetBrains Mono', monospace"
+                                                        fontWeight="500"
+                                                    >
+                                                        {node.label.length > 18 ? node.label.slice(0, 16) + '..' : node.label}
+                                                    </text>
+
+                                                    {/* Line Number Badge (Right corner) */}
                                                     {node.lineNumber > 0 && (
                                                         <g>
-                                                            <circle cx={node.x + node.width / 2 - 8} cy={node.y - node.height / 2 + 8} r={12} fill="#0f172a" stroke={isActive ? '#3b82f6' : '#334155'} strokeWidth={2} />
-                                                            <text x={node.x + node.width / 2 - 8} y={node.y - node.height / 2 + 9} textAnchor="middle" dominantBaseline="middle" fill={isActive ? '#60a5fa' : '#94a3b8'} fontSize="10" fontWeight="600">{node.lineNumber}</text>
+                                                            <circle
+                                                                cx={node.x + node.width / 2 - 10}
+                                                                cy={node.y - node.height / 2 + 10}
+                                                                r="8"
+                                                                fill="#0f172a"
+                                                                stroke="#334155"
+                                                                strokeWidth="1"
+                                                            />
+                                                            <text
+                                                                x={node.x + node.width / 2 - 10}
+                                                                y={node.y - node.height / 2 + 11}
+                                                                textAnchor="middle"
+                                                                dominantBaseline="middle"
+                                                                fill="#94a3b8"
+                                                                fontSize="9"
+                                                            >
+                                                                {node.lineNumber}
+                                                            </text>
                                                         </g>
-                                                    )}
-                                                    {isActive && (
-                                                        <motion.ellipse cx={node.x} cy={node.y} rx={isOval ? node.width / 2 + 5 : node.width / 2 + 10} ry={isOval ? node.height / 2 + 5 : node.height / 2 + 10} fill="none" stroke="#3b82f6" strokeWidth={2} initial={{ opacity: 0.8, scale: 1 }} animate={{ opacity: 0, scale: 1.2 }} transition={{ duration: 1, repeat: Infinity }} />
                                                     )}
                                                 </motion.g>
                                             );
